@@ -156,18 +156,36 @@ def handle_client(client_connection):
                     client_connection.send(f":{list_len}\r\n".encode())
 
             elif command == b"LPOP":
-                # LPOP key
+                # LPOP key [count]
                 key = parts[4]
-                entry = data_store.get(key)
+                count = None
+                if len(parts) > 6:
+                    try:
+                        count = int(parts[6])
+                    except ValueError:
+                        pass
                 
+                entry = data_store.get(key)
                 if not entry or not isinstance(entry[0], list) or len(entry[0]) == 0:
                     client_connection.send(b"$-1\r\n")
                 else:
                     data_list = entry[0]
-                    # Remove and return the first element (index 0)
-                    removed_val = data_list.pop(0)
-                    response = b"$" + str(len(removed_val)).encode() + b"\r\n" + removed_val + b"\r\n"
-                    client_connection.send(response)
+                    
+                    if count is None:
+                        # Old behavior: single element as Bulk String
+                        removed_val = data_list.pop(0)
+                        response = b"$" + str(len(removed_val)).encode() + b"\r\n" + removed_val + b"\r\n"
+                        client_connection.send(response)
+                    else:
+                        # New behavior: multiple elements as RESP Array
+                        popped_items = []
+                        for _ in range(min(count, len(data_list))):
+                            popped_items.append(data_list.pop(0))
+                        
+                        response = f"*{len(popped_items)}\r\n".encode()
+                        for item in popped_items:
+                            response += b"$" + str(len(item)).encode() + b"\r\n" + item + b"\r\n"
+                        client_connection.send(response)
                     
             elif command == b"PING":
                 client_connection.send(b"+PONG\r\n")
