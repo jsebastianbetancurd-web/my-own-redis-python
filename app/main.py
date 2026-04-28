@@ -64,23 +64,26 @@ def handle_client(client_connection):
                     client_connection.send(b"$-1\r\n")
 
             elif command == b"RPUSH":
-                # RPUSH key value
+                # RPUSH key value1 [value2 ...]
                 key = parts[4]
-                value = parts[6]
+                # All values start at index 6 and appear at every other index (6, 8, 10...)
+                # We slice from 6 to the end, jumping by 2
+                new_values = parts[6:-1:2] 
                 
                 if key not in data_store:
-                    data_store[key] = ([value], None)
-                else:
-                    data_list, expiry = data_store[key]
-                    if isinstance(data_list, list):
-                        data_list.append(value)
-                    else:
-                        # Overwrite if it wasn't a list
-                        data_store[key] = ([value], None)
+                    data_store[key] = ([], None)
                 
-                list_len = len(data_store[key][0])
-                # Return RESP Integer: :<length>\r\n
-                response = f":{list_len}\r\n".encode()
+                data_list, expiry = data_store[key]
+                if not isinstance(data_list, list):
+                    # Overwrite if it wasn't a list
+                    data_list = []
+                    data_store[key] = (data_list, None)
+                
+                for v in new_values:
+                    data_list.append(v)
+                
+                # Return the new length as a RESP Integer
+                response = f":{len(data_list)}\r\n".encode()
                 client_connection.send(response)
                     
             elif command == b"PING":
