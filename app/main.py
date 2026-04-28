@@ -1,6 +1,9 @@
 import socket
 import threading
 
+# In-memory database
+data_store = {}
+
 def handle_client(client_connection):
     while True:
         try:
@@ -8,18 +11,35 @@ def handle_client(client_connection):
             if not data:
                 break
             
-            # Basic RESP Parser for ECHO
-            # Example incoming: *2\r\n$4\r\nECHO\r\n$3\r\nhey\r\n
             parts = data.split(b"\r\n")
+            if len(parts) < 3:
+                continue
+                
+            command = parts[2].upper()
             
-            if len(parts) > 4 and b"ECHO" in parts[2].upper():
-                # Extract the message (e.g., b"hey")
+            if command == b"ECHO":
                 message = parts[4]
-                # Format as Bulk String: $<length>\r\n<message>\r\n
                 response = b"$" + str(len(message)).encode() + b"\r\n" + message + b"\r\n"
                 client_connection.send(response)
-            else:
-                # Default back to PONG for simple PING commands
+            
+            elif command == b"SET":
+                # SET key value
+                key = parts[4]
+                value = parts[6]
+                data_store[key] = value
+                client_connection.send(b"+OK\r\n")
+            
+            elif command == b"GET":
+                # GET key
+                key = parts[4]
+                value = data_store.get(key)
+                if value:
+                    response = b"$" + str(len(value)).encode() + b"\r\n" + value + b"\r\n"
+                    client_connection.send(response)
+                else:
+                    client_connection.send(b"$-1\r\n") # Null Bulk String
+                    
+            elif command == b"PING":
                 client_connection.send(b"+PONG\r\n")
                 
         except (ConnectionResetError, IndexError):
