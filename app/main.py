@@ -98,9 +98,24 @@ def handle_client(client_connection):
                     continue
                 
                 data_list = entry[0]
-                # stop is inclusive in Redis, but exclusive in Python slicing
-                # so we use [start : stop + 1]
-                sub_list = data_list[start : stop + 1]
+                length = len(data_list)
+                
+                # Normalize indices (handle negative and out of bounds)
+                def normalize(idx, length):
+                    if idx < 0: idx = length + idx
+                    if idx < 0: idx = 0
+                    if idx >= length: idx = length - 1
+                    return idx
+
+                s_idx = normalize(start, length)
+                e_idx = normalize(stop, length)
+                
+                # Check for empty range cases
+                if start >= length or s_idx > e_idx:
+                    sub_list = []
+                else:
+                    # e_idx + 1 because Python slicing is exclusive on the end
+                    sub_list = data_list[s_idx : e_idx + 1]
                 
                 # Build RESP Array: *<count>\r\n + each element as Bulk String
                 response = f"*{len(sub_list)}\r\n".encode()
