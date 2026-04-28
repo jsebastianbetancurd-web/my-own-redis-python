@@ -86,6 +86,26 @@ def handle_client(client_connection):
                 response = f":{len(data_list)}\r\n".encode()
                 client_connection.send(response)
 
+            elif command == b"LPUSH":
+                # LPUSH key value1 [value2 ...]
+                key = parts[4]
+                new_values = parts[6:-1:2]
+                
+                if key not in data_store:
+                    data_store[key] = ([], None)
+                
+                data_list, expiry = data_store[key]
+                if not isinstance(data_list, list):
+                    data_list = []
+                    data_store[key] = (data_list, None)
+                
+                # Prepend each value one by one to the start (index 0)
+                for v in new_values:
+                    data_list.insert(0, v)
+                
+                response = f":{len(data_list)}\r\n".encode()
+                client_connection.send(response)
+
             elif command == b"LRANGE":
                 # LRANGE key start stop
                 key = parts[4]
