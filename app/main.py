@@ -154,6 +154,20 @@ def handle_client(client_connection):
                 else:
                     list_len = len(entry[0])
                     client_connection.send(f":{list_len}\r\n".encode())
+
+            elif command == b"LPOP":
+                # LPOP key
+                key = parts[4]
+                entry = data_store.get(key)
+                
+                if not entry or not isinstance(entry[0], list) or len(entry[0]) == 0:
+                    client_connection.send(b"$-1\r\n")
+                else:
+                    data_list = entry[0]
+                    # Remove and return the first element (index 0)
+                    removed_val = data_list.pop(0)
+                    response = b"$" + str(len(removed_val)).encode() + b"\r\n" + removed_val + b"\r\n"
+                    client_connection.send(response)
                     
             elif command == b"PING":
                 client_connection.send(b"+PONG\r\n")
