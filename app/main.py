@@ -7,8 +7,22 @@ def handle_client(client_connection):
             data = client_connection.recv(1024)
             if not data:
                 break
-            client_connection.send(b"+PONG\r\n")
-        except ConnectionResetError:
+            
+            # Basic RESP Parser for ECHO
+            # Example incoming: *2\r\n$4\r\nECHO\r\n$3\r\nhey\r\n
+            parts = data.split(b"\r\n")
+            
+            if len(parts) > 4 and b"ECHO" in parts[2].upper():
+                # Extract the message (e.g., b"hey")
+                message = parts[4]
+                # Format as Bulk String: $<length>\r\n<message>\r\n
+                response = b"$" + str(len(message)).encode() + b"\r\n" + message + b"\r\n"
+                client_connection.send(response)
+            else:
+                # Default back to PONG for simple PING commands
+                client_connection.send(b"+PONG\r\n")
+                
+        except (ConnectionResetError, IndexError):
             break
     client_connection.close()
 
