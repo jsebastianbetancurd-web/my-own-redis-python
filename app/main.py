@@ -143,6 +143,17 @@ def handle_client(client_connection):
                     response += b"$" + str(len(item)).encode() + b"\r\n" + item + b"\r\n"
                 
                 client_connection.send(response)
+
+            elif command == b"LLEN":
+                # LLEN key
+                key = parts[4]
+                entry = data_store.get(key)
+                
+                if not entry or not isinstance(entry[0], list):
+                    client_connection.send(b":0\r\n")
+                else:
+                    list_len = len(entry[0])
+                    client_connection.send(f":{list_len}\r\n".encode())
                     
             elif command == b"PING":
                 client_connection.send(b"+PONG\r\n")
