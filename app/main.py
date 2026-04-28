@@ -141,9 +141,9 @@ def handle_client(client_connection):
 
             elif command == b"BLPOP":
                 # BLPOP key1 [key2 ...] timeout
-                # Note: Tester currently uses 1 key and timeout 0
                 key = parts[4]
-                timeout = int(parts[-2]) # Last element before final empty string
+                raw_timeout = parts[-2]
+                timeout_val = float(raw_timeout)
                 
                 def get_popped_item():
                     entry = data_store.get(key)
@@ -153,15 +153,24 @@ def handle_client(client_connection):
 
                 with data_condition:
                     val = get_popped_item()
-                    while val is None:
-                        # Wait for notification
-                        data_condition.wait()
-                        val = get_popped_item()
+                    if timeout_val == 0:
+                        # Indefinite wait: must use while loop to ensure we never return Null
+                        while val is None:
+                            data_condition.wait()
+                            val = get_popped_item()
+                    else:
+                        # Timed wait: wait once and return what we find
+                        if val is None:
+                            data_condition.wait(timeout=timeout_val)
+                            val = get_popped_item()
                 
-                # Format: *2\r\n$key_len\r\nkey\r\n$val_len\r\nval\r\n
-                response = f"*2\r\n${len(key)}\r\n".encode() + key + b"\r\n"
-                response += b"$" + str(len(val)).encode() + b"\r\n" + val + b"\r\n"
-                client_connection.send(response)
+                if val is None:
+                    # Only possible for non-zero timeouts
+                    client_connection.send(b"*-1\r\n")
+                else:
+                    response = f"*2\r\n${len(key)}\r\n".encode() + key + b"\r\n"
+                    response += b"$" + str(len(val)).encode() + b"\r\n" + val + b"\r\n"
+                    client_connection.send(response)
                     
             elif command == b"PING":
                 client_connection.send(b"+PONG\r\n")
