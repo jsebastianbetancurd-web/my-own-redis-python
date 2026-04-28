@@ -85,6 +85,29 @@ def handle_client(client_connection):
                 # Return the new length as a RESP Integer
                 response = f":{len(data_list)}\r\n".encode()
                 client_connection.send(response)
+
+            elif command == b"LRANGE":
+                # LRANGE key start stop
+                key = parts[4]
+                start = int(parts[6])
+                stop = int(parts[8])
+                
+                entry = data_store.get(key)
+                if not entry or not isinstance(entry[0], list):
+                    client_connection.send(b"*0\r\n")
+                    continue
+                
+                data_list = entry[0]
+                # stop is inclusive in Redis, but exclusive in Python slicing
+                # so we use [start : stop + 1]
+                sub_list = data_list[start : stop + 1]
+                
+                # Build RESP Array: *<count>\r\n + each element as Bulk String
+                response = f"*{len(sub_list)}\r\n".encode()
+                for item in sub_list:
+                    response += b"$" + str(len(item)).encode() + b"\r\n" + item + b"\r\n"
+                
+                client_connection.send(response)
                     
             elif command == b"PING":
                 client_connection.send(b"+PONG\r\n")
