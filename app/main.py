@@ -1,7 +1,9 @@
 import socket
 import threading
+import time
 
 # In-memory database
+# Stores: {key: (value, expiry_time)}
 data_store = {}
 
 def handle_client(client_connection):
@@ -23,38 +25,50 @@ def handle_client(client_connection):
                 client_connection.send(response)
             
             elif command == b"SET":
-                # SET key value
+                # SET key value [PX ms]
                 key = parts[4]
                 value = parts[6]
-                data_store[key] = value
+                expiry_time = None
+                
+                # Check for PX argument (index 8) and its value (index 10)
+                if len(parts) > 10 and parts[8].upper() == b"PX":
+                    ms_to_live = int(parts[10])
+                    expiry_time = time.time() + (ms_to_live / 1000)
+                
+                data_store[key] = (value, expiry_time)
                 client_connection.send(b"+OK\r\n")
             
             elif command == b"GET":
                 # GET key
                 key = parts[4]
-                value = data_store.get(key)
-                if value:
-                    response = b"$" + str(len(value)).encode() + b"\r\n" + value + b"\r\n"
-                    client_connection.send(response)
+                entry = data_store.get(key)
+                
+                if entry:
+                    value, expiry_time = entry
+                    # Check if the key has expired
+                    if expiry_time and time.time() > expiry_time:
+                        del data_store[key]
+                        client_connection.send(b"$-1\r\n")
+                    else:
+                        response = b"$" + str(len(value)).encode() + b"\r\n" + value + b"\r\n"
+                        client_connection.send(response)
                 else:
-                    client_connection.send(b"$-1\r\n") # Null Bulk String
+                    client_connection.send(b"$-1\r\n")
                     
             elif command == b"PING":
                 client_connection.send(b"+PONG\r\n")
                 
-        except (ConnectionResetError, IndexError):
+        except (ConnectionResetError, IndexError, ValueError):
             break
     client_connection.close()
 
 def main():
-    # You can use print statements as follows for debugging, they'll be visible when running tests.
     print("Logs from your program will appear here!")
 
     server_socket = socket.create_server(("localhost", 6379), reuse_port=True)
     
     while True:
-        client_connection, client_address = server_socket.accept() # wait for client
-        # Create a new thread for each connection
+        client_connection, client_address = server_socket.accept()
         client_thread = threading.Thread(target=handle_client, args=(client_connection,))
         client_thread.start()
 
