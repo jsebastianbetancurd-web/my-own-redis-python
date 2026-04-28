@@ -50,10 +50,38 @@ def handle_client(client_connection):
                         del data_store[key]
                         client_connection.send(b"$-1\r\n")
                     else:
-                        response = b"$" + str(len(value)).encode() + b"\r\n" + value + b"\r\n"
+                        # Handle both strings and lists for GET (though GET usually only returns strings)
+                        if isinstance(value, list):
+                            # For now, if someone GETs a list, we'll just return the first element or a simple string
+                            # Real Redis would return an error, but let's keep it simple.
+                            val_to_send = value[0]
+                        else:
+                            val_to_send = value
+                            
+                        response = b"$" + str(len(val_to_send)).encode() + b"\r\n" + val_to_send + b"\r\n"
                         client_connection.send(response)
                 else:
                     client_connection.send(b"$-1\r\n")
+
+            elif command == b"RPUSH":
+                # RPUSH key value
+                key = parts[4]
+                value = parts[6]
+                
+                if key not in data_store:
+                    data_store[key] = ([value], None)
+                else:
+                    data_list, expiry = data_store[key]
+                    if isinstance(data_list, list):
+                        data_list.append(value)
+                    else:
+                        # Overwrite if it wasn't a list
+                        data_store[key] = ([value], None)
+                
+                list_len = len(data_store[key][0])
+                # Return RESP Integer: :<length>\r\n
+                response = f":{list_len}\r\n".encode()
+                client_connection.send(response)
                     
             elif command == b"PING":
                 client_connection.send(b"+PONG\r\n")
