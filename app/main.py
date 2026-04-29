@@ -103,6 +103,16 @@ def handle_client(client_connection):
                 client_connection.send(b"+OK\r\n")
                 continue
 
+            if cmd == b"EXEC":
+                if not in_transaction:
+                    client_connection.send(b"-ERR EXEC without MULTI\r\n")
+                else:
+                    # Successfully started MULTI, now process the queue (next stage)
+                    client_connection.send(b"*0\r\n")
+                    in_transaction = False
+                    transaction_queue = []
+                continue
+
             if cmd == b"ECHO":
                 msg = parts[4]
                 client_connection.send(b"$" + str(len(msg)).encode() + b"\r\n" + msg + b"\r\n")
@@ -260,8 +270,8 @@ def handle_client(client_connection):
                     else:
                         l = entry[0]
                         if cnt is None:
-                            val = l.pop(0)
-                            client_connection.send(b"$" + str(len(val)).encode() + b"\r\n" + val + b"\r\n")
+                            v = l.pop(0)
+                            client_connection.send(b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n")
                         else:
                             p = [l.pop(0) for _ in range(min(cnt, len(l)))]
                             res = f"*{len(p)}\r\n".encode()
