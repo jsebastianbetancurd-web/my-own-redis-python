@@ -372,6 +372,9 @@ def handle_client(client_connection):
                             if k not in watched_keys:
                                 watched_keys[k] = key_versions.get(k, 0)
                         client_connection.send(b"+OK\r\n")
+                elif cmd == b"UNWATCH":
+                    watched_keys = {}
+                    client_connection.send(b"+OK\r\n")
                 else:
                     if in_transaction:
                         transaction_queue.append((cmd, cmd_args))
