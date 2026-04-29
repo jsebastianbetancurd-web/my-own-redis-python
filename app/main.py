@@ -5,8 +5,12 @@ import time
 # In-memory database
 # Stores: {key: (value, expiry_time)}
 data_store = {}
+key_versions = {}
 # Condition variable for blocking commands
 data_condition = threading.Condition()
+
+def mark_modified(key):
+    key_versions[key] = key_versions.get(key, 0) + 1
 
 class RedisStream:
     def __init__(self):
@@ -100,7 +104,9 @@ def process_command(cmd, args):
         if len(args) >= 4 and args[2].upper() == b"PX":
             try: expiry = time.time() + (int(args[3])/1000)
             except ValueError: pass
-        with data_condition: data_store[key] = (val, expiry)
+        with data_condition:
+            data_store[key] = (val, expiry)
+            mark_modified(key)
         return b"+OK\r\n"
     elif cmd == b"GET":
         if not args: return b"-ERR wrong number of arguments for 'get' command\r\n"
@@ -109,7 +115,9 @@ def process_command(cmd, args):
         if entry:
             val, exp = entry
             if exp and time.time() > exp:
-                with data_condition: del data_store[key]
+                with data_condition:
+                    del data_store[key]
+                    mark_modified(key)
                 return b"$-1\r\n"
             else:
                 if isinstance(val, (list, RedisStream)): return b"$-1\r\n"
@@ -125,11 +133,13 @@ def process_command(cmd, args):
                 try:
                     new_val = int(val) + 1
                     data_store[key] = (str(new_val).encode(), exp)
+                    mark_modified(key)
                     return f":{new_val}\r\n".encode()
                 except (ValueError, TypeError):
                     return b"-ERR value is not an integer or out of range\r\n"
             else:
                 data_store[key] = (b"1", None)
+                mark_modified(key)
                 return b":1\r\n"
     elif cmd == b"TYPE":
         if not args: return b"+none\r\n"
@@ -153,6 +163,7 @@ def process_command(cmd, args):
             if not isinstance(stream, RedisStream): return b"-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
             success, res = stream.add_entry(id_str, f_dict)
             if success:
+                mark_modified(key)
                 data_condition.notify_all()
                 return b"$" + str(len(res)).encode() + b"\r\n" + res + b"\r\n"
             else: return b"-" + res.encode() + b"\r\n"
@@ -225,6 +236,7 @@ def process_command(cmd, args):
             for v in new_vals:
                 if cmd == b"RPUSH": d_list.append(v)
                 else: d_list.insert(0, v)
+            mark_modified(key)
             data_condition.notify_all()
         return f":{len(d_list)}\r\n".encode()
     elif cmd == b"LRANGE":
@@ -258,9 +270,11 @@ def process_command(cmd, args):
                 l = entry[0]
                 if cnt is None:
                     v = l.pop(0)
+                    mark_modified(key)
                     return b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n"
                 else:
                     p = [l.pop(0) for _ in range(min(cnt, len(l)))]
+                    if p: mark_modified(key)
                     res = f"*{len(p)}\r\n".encode()
                     for i in p: res += b"$" + str(len(i)).encode() + b"\r\n" + i + b"\r\n"
                     return res
@@ -276,6 +290,8 @@ def process_command(cmd, args):
                 while v is None: data_condition.wait(); v = get_p()
             else:
                 if v is None: data_condition.wait(timeout=tval); v = get_p()
+            if v is not None:
+                mark_modified(key)
         if v is None: return b"*-1\r\n"
         else: return f"*2\r\n${len(key)}\r\n".encode() + key + b"\r\n" + b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n"
     return b"-ERR unknown command\r\n"
@@ -298,7 +314,7 @@ def parse_resp(data):
 def handle_client(client_connection):
     in_transaction = False
     transaction_queue = []
-    watched_keys = []
+    watched_keys = {}
 
     while True:
         try:
@@ -322,27 +338,39 @@ def handle_client(client_connection):
                     else:
                         in_transaction = False
                         transaction_queue = []
-                        watched_keys = []
+                        watched_keys = {}
                         client_connection.send(b"+OK\r\n")
                 elif cmd == b"EXEC":
                     if not in_transaction:
                         client_connection.send(b"-ERR EXEC without MULTI\r\n")
                     else:
-                        if not transaction_queue:
-                            client_connection.send(b"*0\r\n")
+                        abort_transaction = False
+                        for k, v in watched_keys.items():
+                            if key_versions.get(k, 0) != v:
+                                abort_transaction = True
+                                break
+                        
+                        if abort_transaction:
+                            client_connection.send(b"*-1\r\n")
                         else:
-                            res = f"*{len(transaction_queue)}\r\n".encode()
-                            for q_cmd, q_args in transaction_queue:
-                                res += process_command(q_cmd, q_args)
-                            client_connection.send(res)
+                            if not transaction_queue:
+                                client_connection.send(b"*0\r\n")
+                            else:
+                                res = f"*{len(transaction_queue)}\r\n".encode()
+                                for q_cmd, q_args in transaction_queue:
+                                    res += process_command(q_cmd, q_args)
+                                client_connection.send(res)
+                        
                         in_transaction = False
                         transaction_queue = []
-                        watched_keys = []
+                        watched_keys = {}
                 elif cmd == b"WATCH":
                     if in_transaction:
                         client_connection.send(b"-ERR WATCH inside MULTI is not allowed\r\n")
                     else:
-                        watched_keys.extend(cmd_args)
+                        for k in cmd_args:
+                            if k not in watched_keys:
+                                watched_keys[k] = key_versions.get(k, 0)
                         client_connection.send(b"+OK\r\n")
                 else:
                     if in_transaction:
