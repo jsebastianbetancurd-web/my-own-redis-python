@@ -11,10 +11,33 @@ data_condition = threading.Condition()
 class RedisStream:
     def __init__(self):
         self.entries = [] # List of tuples: (id, {fields})
+        self.last_id = (0, 0) # (time, seq)
     
-    def add_entry(self, entry_id, fields):
-        self.entries.append((entry_id, fields))
-        return entry_id
+    def validate_id(self, entry_id_str):
+        # entry_id_str is b"time-seq"
+        try:
+            t_str, s_str = entry_id_str.split(b"-")
+            t, s = int(t_str), int(s_str)
+        except ValueError:
+            return False, "Invalid ID format"
+
+        if t == 0 and s == 0:
+            return False, "ERR The ID specified in XADD must be greater than 0-0"
+        
+        last_t, last_s = self.last_id
+        if t < last_t or (t == last_t and s <= last_s):
+            return False, "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+        
+        return True, (t, s)
+
+    def add_entry(self, entry_id_str, fields):
+        is_valid, result = self.validate_id(entry_id_str)
+        if not is_valid:
+            return False, result
+        
+        self.last_id = result
+        self.entries.append((entry_id_str, fields))
+        return True, entry_id_str
 
 def handle_client(client_connection):
     while True:
@@ -57,8 +80,6 @@ def handle_client(client_connection):
                         client_connection.send(b"$-1\r\n")
                     else:
                         if isinstance(value, (list, RedisStream)):
-                            # For simple GET on complex types, real Redis behavior varies, 
-                            # but we return Null or error. Let's return Null.
                             client_connection.send(b"$-1\r\n")
                         else:
                             val_to_send = value
@@ -84,8 +105,7 @@ def handle_client(client_connection):
             elif command == b"XADD":
                 # XADD stream_key entry_id field1 value1 [field2 value2 ...]
                 key = parts[4]
-                entry_id = parts[6]
-                # Fields and values start at index 8
+                entry_id_str = parts[6]
                 raw_fields = parts[8:-1:2]
                 raw_values = parts[9:-1:2]
                 fields_dict = dict(zip(raw_fields, raw_values))
@@ -96,14 +116,16 @@ def handle_client(client_connection):
                     
                     stream = data_store[key][0]
                     if not isinstance(stream, RedisStream):
-                        # Should probably error, but let's overwrite for simplicity
                         stream = RedisStream()
                         data_store[key] = (stream, None)
                     
-                    added_id = stream.add_entry(entry_id, fields_dict)
-                    data_condition.notify_all()
+                    success, result = stream.add_entry(entry_id_str, fields_dict)
+                    if success:
+                        data_condition.notify_all()
+                        response = b"$" + str(len(result)).encode() + b"\r\n" + result + b"\r\n"
+                    else:
+                        response = b"-" + result.encode() + b"\r\n"
                 
-                response = b"$" + str(len(added_id)).encode() + b"\r\n" + added_id + b"\r\n"
                 client_connection.send(response)
 
             elif command == b"RPUSH" or command == b"LPUSH":
