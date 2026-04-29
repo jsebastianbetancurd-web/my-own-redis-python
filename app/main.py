@@ -13,31 +13,53 @@ class RedisStream:
         self.entries = [] # List of tuples: (id, {fields})
         self.last_id = (0, 0) # (time, seq)
     
-    def validate_id(self, entry_id_str):
-        # entry_id_str is b"time-seq"
+    def validate_and_generate_id(self, entry_id_str):
+        # entry_id_str is b"time-seq" or b"time-*"
         try:
-            t_str, s_str = entry_id_str.split(b"-")
-            t, s = int(t_str), int(s_str)
+            t_part, s_part = entry_id_str.split(b"-")
+            t = int(t_part)
         except ValueError:
             return False, "Invalid ID format"
 
-        if t == 0 and s == 0:
-            return False, "ERR The ID specified in XADD must be greater than 0-0"
-        
         last_t, last_s = self.last_id
-        if t < last_t or (t == last_t and s <= last_s):
-            return False, "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+
+        if s_part == b"*":
+            # Auto-generate sequence
+            if t == 0:
+                # Rule: 0-* becomes 0-1 if 0-0 is the floor
+                if last_t == 0: s = last_s + 1
+                else: s = 1
+            elif t == last_t:
+                s = last_s + 1
+            elif t > last_t:
+                s = 0
+            else:
+                # t < last_t is invalid
+                return False, "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+        else:
+            try:
+                s = int(s_part)
+            except ValueError:
+                return False, "Invalid ID format"
+
+            if t == 0 and s == 0:
+                return False, "ERR The ID specified in XADD must be greater than 0-0"
+            
+            if t < last_t or (t == last_t and s <= last_s):
+                return False, "ERR The ID specified in XADD is equal or smaller than the target stream top item"
         
-        return True, (t, s)
+        final_id = f"{t}-{s}".encode()
+        return True, (t, s, final_id)
 
     def add_entry(self, entry_id_str, fields):
-        is_valid, result = self.validate_id(entry_id_str)
-        if not is_valid:
+        success, result = self.validate_and_generate_id(entry_id_str)
+        if not success:
             return False, result
         
-        self.last_id = result
-        self.entries.append((entry_id_str, fields))
-        return True, entry_id_str
+        t, s, final_id = result
+        self.last_id = (t, s)
+        self.entries.append((final_id, fields))
+        return True, final_id
 
 def handle_client(client_connection):
     while True:
@@ -103,7 +125,6 @@ def handle_client(client_connection):
                         client_connection.send(b"+string\r\n")
 
             elif command == b"XADD":
-                # XADD stream_key entry_id field1 value1 [field2 value2 ...]
                 key = parts[4]
                 entry_id_str = parts[6]
                 raw_fields = parts[8:-1:2]
@@ -122,8 +143,10 @@ def handle_client(client_connection):
                     success, result = stream.add_entry(entry_id_str, fields_dict)
                     if success:
                         data_condition.notify_all()
+                        # result is final_id (bytes)
                         response = b"$" + str(len(result)).encode() + b"\r\n" + result + b"\r\n"
                     else:
+                        # result is error string
                         response = b"-" + result.encode() + b"\r\n"
                 
                 client_connection.send(response)
