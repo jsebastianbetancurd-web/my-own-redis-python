@@ -116,6 +116,20 @@ def handle_client(client_connection):
                 else:
                     client_connection.send(f":{len(entry[0])}\r\n".encode())
 
+            elif command == b"TYPE":
+                # TYPE key
+                key = parts[4]
+                entry = data_store.get(key)
+                
+                if not entry:
+                    client_connection.send(b"+none\r\n")
+                else:
+                    value = entry[0]
+                    if isinstance(value, list):
+                        client_connection.send(b"+list\r\n")
+                    else:
+                        client_connection.send(b"+string\r\n")
+
             elif command == b"LPOP":
                 key = parts[4]
                 count = None
