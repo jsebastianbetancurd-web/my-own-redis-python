@@ -86,6 +86,10 @@ def encode_stream_entry(eid, fields):
     return res
 
 def handle_client(client_connection):
+    # Per-connection state
+    in_transaction = False
+    transaction_queue = []
+
     while True:
         try:
             data = client_connection.recv(1024)
@@ -94,6 +98,11 @@ def handle_client(client_connection):
             if len(parts) < 3: continue
             cmd = parts[2].upper()
             
+            if cmd == b"MULTI":
+                in_transaction = True
+                client_connection.send(b"+OK\r\n")
+                continue
+
             if cmd == b"ECHO":
                 msg = parts[4]
                 client_connection.send(b"$" + str(len(msg)).encode() + b"\r\n" + msg + b"\r\n")
@@ -123,15 +132,12 @@ def handle_client(client_connection):
                     if entry:
                         val, exp = entry
                         try:
-                            # Redis INCR works on numeric strings
                             new_val = int(val) + 1
                             data_store[key] = (str(new_val).encode(), exp)
                             client_connection.send(f":{new_val}\r\n".encode())
                         except (ValueError, TypeError):
                             client_connection.send(b"-ERR value is not an integer or out of range\r\n")
                     else:
-                        # Stage 29 focuses on existing numeric strings, 
-                        # but handle missing key as 1 per Redis spec.
                         data_store[key] = (b"1", None)
                         client_connection.send(b":1\r\n")
 
@@ -254,8 +260,8 @@ def handle_client(client_connection):
                     else:
                         l = entry[0]
                         if cnt is None:
-                            v = l.pop(0)
-                            client_connection.send(b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n")
+                            val = l.pop(0)
+                            client_connection.send(b"$" + str(len(val)).encode() + b"\r\n" + val + b"\r\n")
                         else:
                             p = [l.pop(0) for _ in range(min(cnt, len(l)))]
                             res = f"*{len(p)}\r\n".encode()
