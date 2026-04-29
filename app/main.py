@@ -278,6 +278,8 @@ def process_command(cmd, args):
                 if v is None: data_condition.wait(timeout=tval); v = get_p()
         if v is None: return b"*-1\r\n"
         else: return f"*2\r\n${len(key)}\r\n".encode() + key + b"\r\n" + b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n"
+    elif cmd == b"WATCH":
+        return b"+OK\r\n"
     return b"-ERR unknown command\r\n"
 
 def parse_resp(data):
@@ -338,6 +340,9 @@ def handle_client(client_connection):
                             client_connection.send(res)
                         in_transaction = False
                         transaction_queue = []
+                elif cmd == b"WATCH":
+                    # WATCH is always executed immediately
+                    client_connection.send(b"+OK\r\n")
                 else:
                     if in_transaction:
                         transaction_queue.append((cmd, cmd_args))
