@@ -151,36 +151,42 @@ def handle_client(client_connection):
 
             elif cmd == b"XREAD":
                 # XREAD [BLOCK ms] STREAMS key1 key2 id1 id2
+                block_ms = None
                 streams_idx = -1
                 for i, p in enumerate(parts):
+                    if p.upper() == b"BLOCK":
+                        block_ms = int(parts[i+2])
                     if p.upper() == b"STREAMS":
                         streams_idx = i
                         break
                 
-                # Number of keys = (remaining elements - 1) / 2
-                # e.g. STREAMS k1 k2 i1 i2 -> indices 4 5 6 7. (7-4+1) = 4 elements.
-                # parts[-1] is empty, so we look at elements between streams_idx and end
                 remaining = parts[streams_idx+1 : -1]
                 num_keys = len(remaining) // 2
-                keys = remaining[:num_keys]
-                ids = remaining[num_keys:]
+                actual_keys = remaining[:num_keys][1::2]
+                actual_ids = remaining[num_keys:][1::2]
                 
-                # Only skipping lengths ($len)
-                # Wait, STREAMS is at parts[streams_idx].
-                # RESP format means every value has a $len before it.
-                # Let's use a simpler way: jump by 2
-                actual_keys = keys[1::2]
-                actual_ids = ids[1::2]
-                
-                final_results = []
-                for k, tid in zip(actual_keys, actual_ids):
-                    entry = data_store.get(k)
-                    if entry and isinstance(entry[0], RedisStream):
-                        items = entry[0].get_after(tid)
-                        if items: final_results.append((k, items))
+                def get_results():
+                    results = []
+                    for k, tid in zip(actual_keys, actual_ids):
+                        entry = data_store.get(k)
+                        if entry and isinstance(entry[0], RedisStream):
+                            items = entry[0].get_after(tid)
+                            if items: results.append((k, items))
+                    return results
+
+                with data_condition:
+                    final_results = get_results()
+                    if not final_results and block_ms is not None:
+                        if block_ms == 0:
+                            while not final_results:
+                                data_condition.wait()
+                                final_results = get_results()
+                        else:
+                            data_condition.wait(timeout=block_ms/1000)
+                            final_results = get_results()
                 
                 if not final_results:
-                    client_connection.send(b"$-1\r\n")
+                    client_connection.send(b"*-1\r\n")
                 else:
                     res = f"*{len(final_results)}\r\n".encode()
                     for k, items in final_results:
@@ -192,11 +198,6 @@ def handle_client(client_connection):
 
             elif cmd == b"RPUSH" or cmd == b"LPUSH":
                 key, new_vals = parts[4], parts[6:-1:2]
-                # Wait, indices for RPUSH/LPUSH are also affected by $len
-                # key is at parts[4], lengths at 3, 5, 7... values at 4, 6, 8...
-                # Actually, my previous slice [6:-1:2] was working but I should check
-                # parts: [0:*n, 1:$len, 2:RPUSH, 3:$len, 4:key, 5:$len, 6:val1, 7:$len, 8:val2...]
-                # Yes, index 6, 8, 10 are the values!
                 with data_condition:
                     if key not in data_store: data_store[key] = ([], None)
                     d_list, _ = data_store[key]
