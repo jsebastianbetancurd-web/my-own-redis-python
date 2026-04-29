@@ -14,6 +14,17 @@ class RedisStream:
         self.last_id = (0, 0) # (time, seq)
     
     def validate_and_generate_id(self, entry_id_str):
+        # Handle full auto-generation "*"
+        if entry_id_str == b"*":
+            t = int(time.time() * 1000)
+            last_t, last_s = self.last_id
+            if t == last_t:
+                s = last_s + 1
+            else:
+                s = 0
+            final_id = f"{t}-{s}".encode()
+            return True, (t, s, final_id)
+
         # entry_id_str is b"time-seq" or b"time-*"
         try:
             t_part, s_part = entry_id_str.split(b"-")
@@ -26,7 +37,6 @@ class RedisStream:
         if s_part == b"*":
             # Auto-generate sequence
             if t == 0:
-                # Rule: 0-* becomes 0-1 if 0-0 is the floor
                 if last_t == 0: s = last_s + 1
                 else: s = 1
             elif t == last_t:
@@ -34,7 +44,6 @@ class RedisStream:
             elif t > last_t:
                 s = 0
             else:
-                # t < last_t is invalid
                 return False, "ERR The ID specified in XADD is equal or smaller than the target stream top item"
         else:
             try:
@@ -143,10 +152,8 @@ def handle_client(client_connection):
                     success, result = stream.add_entry(entry_id_str, fields_dict)
                     if success:
                         data_condition.notify_all()
-                        # result is final_id (bytes)
                         response = b"$" + str(len(result)).encode() + b"\r\n" + result + b"\r\n"
                     else:
-                        # result is error string
                         response = b"-" + result.encode() + b"\r\n"
                 
                 client_connection.send(response)
