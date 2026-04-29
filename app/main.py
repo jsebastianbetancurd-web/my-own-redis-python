@@ -150,21 +150,28 @@ def handle_client(client_connection):
                     client_connection.send(res)
 
             elif cmd == b"XREAD":
-                # XREAD [BLOCK ms] STREAMS key1 key2 id1 id2
                 block_ms = None
                 streams_idx = -1
                 for i, p in enumerate(parts):
-                    if p.upper() == b"BLOCK":
-                        block_ms = int(parts[i+2])
-                    if p.upper() == b"STREAMS":
-                        streams_idx = i
-                        break
+                    if p.upper() == b"BLOCK": block_ms = int(parts[i+2])
+                    if p.upper() == b"STREAMS": streams_idx = i; break
                 
                 remaining = parts[streams_idx+1 : -1]
                 num_keys = len(remaining) // 2
                 actual_keys = remaining[:num_keys][1::2]
-                actual_ids = remaining[num_keys:][1::2]
+                raw_ids = remaining[num_keys:][1::2]
                 
+                # Snapshot IDs for '$'
+                actual_ids = []
+                for k, tid in zip(actual_keys, raw_ids):
+                    if tid == b"$":
+                        entry = data_store.get(k)
+                        if entry and isinstance(entry[0], RedisStream):
+                            lt, ls = entry[0].last_id
+                            actual_ids.append(f"{lt}-{ls}".encode())
+                        else: actual_ids.append(b"0-0")
+                    else: actual_ids.append(tid)
+
                 def get_results():
                     results = []
                     for k, tid in zip(actual_keys, actual_ids):
@@ -185,13 +192,11 @@ def handle_client(client_connection):
                             data_condition.wait(timeout=block_ms/1000)
                             final_results = get_results()
                 
-                if not final_results:
-                    client_connection.send(b"*-1\r\n")
+                if not final_results: client_connection.send(b"*-1\r\n")
                 else:
                     res = f"*{len(final_results)}\r\n".encode()
                     for k, items in final_results:
-                        res += b"*2\r\n"
-                        res += b"$" + str(len(k)).encode() + b"\r\n" + k + b"\r\n"
+                        res += b"*2\r\n" + b"$" + str(len(k)).encode() + b"\r\n" + k + b"\r\n"
                         res += f"*{len(items)}\r\n".encode()
                         for eid, fields in items: res += encode_stream_entry(eid, fields)
                     client_connection.send(res)
@@ -227,8 +232,7 @@ def handle_client(client_connection):
                 client_connection.send(f":{len(entry[0])}\r\n".encode() if entry and isinstance(entry[0], list) else b":0\r\n")
 
             elif cmd == b"LPOP":
-                key = parts[4]
-                cnt = int(parts[6]) if len(parts) > 6 else None
+                key, cnt = parts[4], int(parts[6]) if len(parts) > 6 else None
                 with data_condition:
                     entry = data_store.get(key)
                     if not entry or not isinstance(entry[0], list) or len(entry[0]) == 0: client_connection.send(b"$-1\r\n")
@@ -256,7 +260,6 @@ def handle_client(client_connection):
                         if v is None: data_condition.wait(timeout=tval); v = get_p()
                 if v is None: client_connection.send(b"*-1\r\n")
                 else: client_connection.send(f"*2\r\n${len(key)}\r\n".encode() + key + b"\r\n" + b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n")
-                    
             elif cmd == b"PING": client_connection.send(b"+PONG\r\n")
         except (ConnectionResetError, IndexError, ValueError): break
     client_connection.close()
