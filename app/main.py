@@ -116,6 +116,25 @@ def handle_client(client_connection):
                         else: client_connection.send(b"$" + str(len(val)).encode() + b"\r\n" + val + b"\r\n")
                 else: client_connection.send(b"$-1\r\n")
 
+            elif cmd == b"INCR":
+                key = parts[4]
+                with data_condition:
+                    entry = data_store.get(key)
+                    if entry:
+                        val, exp = entry
+                        try:
+                            # Redis INCR works on numeric strings
+                            new_val = int(val) + 1
+                            data_store[key] = (str(new_val).encode(), exp)
+                            client_connection.send(f":{new_val}\r\n".encode())
+                        except (ValueError, TypeError):
+                            client_connection.send(b"-ERR value is not an integer or out of range\r\n")
+                    else:
+                        # Stage 29 focuses on existing numeric strings, 
+                        # but handle missing key as 1 per Redis spec.
+                        data_store[key] = (b"1", None)
+                        client_connection.send(b":1\r\n")
+
             elif cmd == b"TYPE":
                 entry = data_store.get(parts[4])
                 if not entry: client_connection.send(b"+none\r\n")
@@ -155,13 +174,10 @@ def handle_client(client_connection):
                 for i, p in enumerate(parts):
                     if p.upper() == b"BLOCK": block_ms = int(parts[i+2])
                     if p.upper() == b"STREAMS": streams_idx = i; break
-                
                 remaining = parts[streams_idx+1 : -1]
                 num_keys = len(remaining) // 2
                 actual_keys = remaining[:num_keys][1::2]
                 raw_ids = remaining[num_keys:][1::2]
-                
-                # Snapshot IDs for '$'
                 actual_ids = []
                 for k, tid in zip(actual_keys, raw_ids):
                     if tid == b"$":
@@ -191,7 +207,6 @@ def handle_client(client_connection):
                         else:
                             data_condition.wait(timeout=block_ms/1000)
                             final_results = get_results()
-                
                 if not final_results: client_connection.send(b"*-1\r\n")
                 else:
                     res = f"*{len(final_results)}\r\n".encode()
