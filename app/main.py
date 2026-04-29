@@ -85,213 +85,266 @@ def encode_stream_entry(eid, fields):
         res += b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n"
     return res
 
+def process_command(cmd, args):
+    cmd = cmd.upper()
+    if cmd == b"PING":
+        return b"+PONG\r\n"
+    elif cmd == b"ECHO":
+        if not args: return b"-ERR wrong number of arguments for 'echo' command\r\n"
+        msg = args[0]
+        return b"$" + str(len(msg)).encode() + b"\r\n" + msg + b"\r\n"
+    elif cmd == b"SET":
+        if len(args) < 2: return b"-ERR wrong number of arguments for 'set' command\r\n"
+        key, val = args[0], args[1]
+        expiry = None
+        if len(args) >= 4 and args[2].upper() == b"PX":
+            try: expiry = time.time() + (int(args[3])/1000)
+            except ValueError: pass
+        with data_condition: data_store[key] = (val, expiry)
+        return b"+OK\r\n"
+    elif cmd == b"GET":
+        if not args: return b"-ERR wrong number of arguments for 'get' command\r\n"
+        key = args[0]
+        entry = data_store.get(key)
+        if entry:
+            val, exp = entry
+            if exp and time.time() > exp:
+                with data_condition: del data_store[key]
+                return b"$-1\r\n"
+            else:
+                if isinstance(val, (list, RedisStream)): return b"$-1\r\n"
+                else: return b"$" + str(len(val)).encode() + b"\r\n" + val + b"\r\n"
+        else: return b"$-1\r\n"
+    elif cmd == b"INCR":
+        if not args: return b"-ERR wrong number of arguments for 'incr' command\r\n"
+        key = args[0]
+        with data_condition:
+            entry = data_store.get(key)
+            if entry:
+                val, exp = entry
+                try:
+                    new_val = int(val) + 1
+                    data_store[key] = (str(new_val).encode(), exp)
+                    return f":{new_val}\r\n".encode()
+                except (ValueError, TypeError):
+                    return b"-ERR value is not an integer or out of range\r\n"
+            else:
+                data_store[key] = (b"1", None)
+                return b":1\r\n"
+    elif cmd == b"TYPE":
+        if not args: return b"+none\r\n"
+        key = args[0]
+        entry = data_store.get(key)
+        if not entry: return b"+none\r\n"
+        else:
+            v = entry[0]
+            if isinstance(v, list): return b"+list\r\n"
+            elif isinstance(v, RedisStream): return b"+stream\r\n"
+            else: return b"+string\r\n"
+    elif cmd == b"XADD":
+        if len(args) < 4: return b"-ERR wrong number of arguments for 'xadd' command\r\n"
+        key, id_str = args[0], args[1]
+        f_dict = {}
+        for i in range(2, len(args), 2):
+            if i+1 < len(args): f_dict[args[i]] = args[i+1]
+        with data_condition:
+            if key not in data_store: data_store[key] = (RedisStream(), None)
+            stream = data_store[key][0]
+            if not isinstance(stream, RedisStream): return b"-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+            success, res = stream.add_entry(id_str, f_dict)
+            if success:
+                data_condition.notify_all()
+                return b"$" + str(len(res)).encode() + b"\r\n" + res + b"\r\n"
+            else: return b"-" + res.encode() + b"\r\n"
+    elif cmd == b"XRANGE":
+        if len(args) < 3: return b"-ERR wrong number of arguments for 'xrange' command\r\n"
+        key, start, end = args[0], args[1], args[2]
+        entry = data_store.get(key)
+        if not entry or not isinstance(entry[0], RedisStream): return b"*0\r\n"
+        else:
+            stream = entry[0]
+            results = stream.get_range(start, end)
+            res = f"*{len(results)}\r\n".encode()
+            for eid, fields in results: res += encode_stream_entry(eid, fields)
+            return res
+    elif cmd == b"XREAD":
+        block_ms = None
+        streams_idx = -1
+        for i, arg in enumerate(args):
+            if arg.upper() == b"BLOCK" and i+1 < len(args): block_ms = int(args[i+1])
+            if arg.upper() == b"STREAMS": streams_idx = i; break
+        if streams_idx == -1: return b"-ERR missing STREAMS keyword\r\n"
+        remaining = args[streams_idx+1:]
+        num_keys = len(remaining) // 2
+        actual_keys = remaining[:num_keys]
+        raw_ids = remaining[num_keys:]
+        actual_ids = []
+        for k, tid in zip(actual_keys, raw_ids):
+            if tid == b"$":
+                entry = data_store.get(k)
+                if entry and isinstance(entry[0], RedisStream):
+                    lt, ls = entry[0].last_id
+                    actual_ids.append(f"{lt}-{ls}".encode())
+                else: actual_ids.append(b"0-0")
+            else: actual_ids.append(tid)
+
+        def get_results():
+            results = []
+            for k, tid in zip(actual_keys, actual_ids):
+                entry = data_store.get(k)
+                if entry and isinstance(entry[0], RedisStream):
+                    items = entry[0].get_after(tid)
+                    if items: results.append((k, items))
+            return results
+
+        with data_condition:
+            final_results = get_results()
+            if not final_results and block_ms is not None:
+                if block_ms == 0:
+                    while not final_results:
+                        data_condition.wait()
+                        final_results = get_results()
+                else:
+                    data_condition.wait(timeout=block_ms/1000)
+                    final_results = get_results()
+        if not final_results: return b"*-1\r\n"
+        else:
+            res = f"*{len(final_results)}\r\n".encode()
+            for k, items in final_results:
+                res += b"*2\r\n" + b"$" + str(len(k)).encode() + b"\r\n" + k + b"\r\n"
+                res += f"*{len(items)}\r\n".encode()
+                for eid, fields in items: res += encode_stream_entry(eid, fields)
+            return res
+    elif cmd == b"RPUSH" or cmd == b"LPUSH":
+        if len(args) < 2: return b"-ERR wrong number of arguments\r\n"
+        key, new_vals = args[0], args[1:]
+        with data_condition:
+            if key not in data_store: data_store[key] = ([], None)
+            d_list, _ = data_store[key]
+            if not isinstance(d_list, list): return b"-ERR WRONGTYPE\r\n"
+            for v in new_vals:
+                if cmd == b"RPUSH": d_list.append(v)
+                else: d_list.insert(0, v)
+            data_condition.notify_all()
+        return f":{len(d_list)}\r\n".encode()
+    elif cmd == b"LRANGE":
+        if len(args) < 3: return b"-ERR wrong number of arguments\r\n"
+        key, s, e = args[0], int(args[1]), int(args[2])
+        entry = data_store.get(key)
+        if not entry or not isinstance(entry[0], list): return b"*0\r\n"
+        else:
+            l = entry[0]
+            def norm(i, n):
+                if i < 0: i = n + i
+                return max(0, min(i, n-1))
+            if not l: return b"*0\r\n"
+            si, ei = norm(s, len(l)), norm(e, len(l))
+            sub = [] if (s >= len(l) or (s >= 0 and s > e and e >= 0) or (s < 0 and e < 0 and s > e)) else l[si : ei + 1]
+            if s >= 0 and e >= 0 and s > e: sub = []
+            res = f"*{len(sub)}\r\n".encode()
+            for i in sub: res += b"$" + str(len(i)).encode() + b"\r\n" + i + b"\r\n"
+            return res
+    elif cmd == b"LLEN":
+        if not args: return b":0\r\n"
+        entry = data_store.get(args[0])
+        return f":{len(entry[0])}\r\n".encode() if entry and isinstance(entry[0], list) else b":0\r\n"
+    elif cmd == b"LPOP":
+        if not args: return b"$-1\r\n"
+        key, cnt = args[0], int(args[1]) if len(args) > 1 else None
+        with data_condition:
+            entry = data_store.get(key)
+            if not entry or not isinstance(entry[0], list) or len(entry[0]) == 0: return b"$-1\r\n"
+            else:
+                l = entry[0]
+                if cnt is None:
+                    v = l.pop(0)
+                    return b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n"
+                else:
+                    p = [l.pop(0) for _ in range(min(cnt, len(l)))]
+                    res = f"*{len(p)}\r\n".encode()
+                    for i in p: res += b"$" + str(len(i)).encode() + b"\r\n" + i + b"\r\n"
+                    return res
+    elif cmd == b"BLPOP":
+        if len(args) < 2: return b"*-1\r\n"
+        key, tval = args[0], float(args[-1])
+        def get_p():
+            ent = data_store.get(key)
+            return ent[0].pop(0) if ent and isinstance(ent[0], list) and len(ent[0]) > 0 else None
+        with data_condition:
+            v = get_p()
+            if tval == 0:
+                while v is None: data_condition.wait(); v = get_p()
+            else:
+                if v is None: data_condition.wait(timeout=tval); v = get_p()
+        if v is None: return b"*-1\r\n"
+        else: return f"*2\r\n${len(key)}\r\n".encode() + key + b"\r\n" + b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n"
+    return b"-ERR unknown command\r\n"
+
+def parse_resp(data):
+    if not data: return None, b""
+    if data[0:1] != b"*": return None, b""
+    try:
+        lines = data.split(b"\r\n")
+        num_args = int(lines[0][1:])
+        args = []
+        curr = 1
+        for _ in range(num_args):
+            if lines[curr][0:1] == b"$":
+                args.append(lines[curr+1])
+                curr += 2
+        return args, b"\r\n".join(lines[curr:])
+    except: return None, b""
+
 def handle_client(client_connection):
-    # Per-connection state
     in_transaction = False
     transaction_queue = []
 
     while True:
         try:
-            data = client_connection.recv(1024)
+            data = client_connection.recv(4096)
             if not data: break
-            parts = data.split(b"\r\n")
-            if len(parts) < 3: continue
-            cmd = parts[2].upper()
             
-            if cmd == b"MULTI":
-                in_transaction = True
-                client_connection.send(b"+OK\r\n")
-                continue
-
-            if cmd == b"EXEC":
-                if not in_transaction:
-                    client_connection.send(b"-ERR EXEC without MULTI\r\n")
-                else:
-                    # Successfully started MULTI, now process the queue (next stage)
-                    client_connection.send(b"*0\r\n")
-                    in_transaction = False
-                    transaction_queue = []
-                continue
-
-            if cmd == b"ECHO":
-                msg = parts[4]
-                client_connection.send(b"$" + str(len(msg)).encode() + b"\r\n" + msg + b"\r\n")
-            
-            elif cmd == b"SET":
-                key, val = parts[4], parts[6]
-                expiry = time.time() + (int(parts[10])/1000) if len(parts) > 10 and parts[8].upper() == b"PX" else None
-                with data_condition: data_store[key] = (val, expiry)
-                client_connection.send(b"+OK\r\n")
-            
-            elif cmd == b"GET":
-                entry = data_store.get(parts[4])
-                if entry:
-                    val, exp = entry
-                    if exp and time.time() > exp:
-                        with data_condition: del data_store[parts[4]]
-                        client_connection.send(b"$-1\r\n")
+            # Simple parser to handle multiple commands in one recv if needed
+            # but Codecrafters usually sends one at a time.
+            while data:
+                args, rest = parse_resp(data)
+                if not args: break
+                data = rest
+                
+                cmd = args[0].upper()
+                cmd_args = args[1:]
+                
+                if cmd == b"MULTI":
+                    in_transaction = True
+                    client_connection.send(b"+OK\r\n")
+                elif cmd == b"DISCARD":
+                    if not in_transaction:
+                        client_connection.send(b"-ERR DISCARD without MULTI\r\n")
                     else:
-                        if isinstance(val, (list, RedisStream)): client_connection.send(b"$-1\r\n")
-                        else: client_connection.send(b"$" + str(len(val)).encode() + b"\r\n" + val + b"\r\n")
-                else: client_connection.send(b"$-1\r\n")
-
-            elif cmd == b"INCR":
-                key = parts[4]
-                with data_condition:
-                    entry = data_store.get(key)
-                    if entry:
-                        val, exp = entry
-                        try:
-                            new_val = int(val) + 1
-                            data_store[key] = (str(new_val).encode(), exp)
-                            client_connection.send(f":{new_val}\r\n".encode())
-                        except (ValueError, TypeError):
-                            client_connection.send(b"-ERR value is not an integer or out of range\r\n")
+                        in_transaction = False
+                        transaction_queue = []
+                        client_connection.send(b"+OK\r\n")
+                elif cmd == b"EXEC":
+                    if not in_transaction:
+                        client_connection.send(b"-ERR EXEC without MULTI\r\n")
                     else:
-                        data_store[key] = (b"1", None)
-                        client_connection.send(b":1\r\n")
-
-            elif cmd == b"TYPE":
-                entry = data_store.get(parts[4])
-                if not entry: client_connection.send(b"+none\r\n")
-                else:
-                    v = entry[0]
-                    if isinstance(v, list): client_connection.send(b"+list\r\n")
-                    elif isinstance(v, RedisStream): client_connection.send(b"+stream\r\n")
-                    else: client_connection.send(b"+string\r\n")
-
-            elif cmd == b"XADD":
-                key, id_str = parts[4], parts[6]
-                raw_f, raw_v = parts[8:-1:4], parts[10:-1:4]
-                f_dict = dict(zip(raw_f, raw_v))
-                with data_condition:
-                    if key not in data_store: data_store[key] = (RedisStream(), None)
-                    stream = data_store[key][0]
-                    success, res = stream.add_entry(id_str, f_dict)
-                    if success:
-                        data_condition.notify_all()
-                        client_connection.send(b"$" + str(len(res)).encode() + b"\r\n" + res + b"\r\n")
-                    else: client_connection.send(b"-" + res.encode() + b"\r\n")
-
-            elif cmd == b"XRANGE":
-                key, start, end = parts[4], parts[6], parts[8]
-                entry = data_store.get(key)
-                if not entry or not isinstance(entry[0], RedisStream): client_connection.send(b"*0\r\n")
-                else:
-                    stream = entry[0]
-                    results = stream.get_range(start, end)
-                    res = f"*{len(results)}\r\n".encode()
-                    for eid, fields in results: res += encode_stream_entry(eid, fields)
-                    client_connection.send(res)
-
-            elif cmd == b"XREAD":
-                block_ms = None
-                streams_idx = -1
-                for i, p in enumerate(parts):
-                    if p.upper() == b"BLOCK": block_ms = int(parts[i+2])
-                    if p.upper() == b"STREAMS": streams_idx = i; break
-                remaining = parts[streams_idx+1 : -1]
-                num_keys = len(remaining) // 2
-                actual_keys = remaining[:num_keys][1::2]
-                raw_ids = remaining[num_keys:][1::2]
-                actual_ids = []
-                for k, tid in zip(actual_keys, raw_ids):
-                    if tid == b"$":
-                        entry = data_store.get(k)
-                        if entry and isinstance(entry[0], RedisStream):
-                            lt, ls = entry[0].last_id
-                            actual_ids.append(f"{lt}-{ls}".encode())
-                        else: actual_ids.append(b"0-0")
-                    else: actual_ids.append(tid)
-
-                def get_results():
-                    results = []
-                    for k, tid in zip(actual_keys, actual_ids):
-                        entry = data_store.get(k)
-                        if entry and isinstance(entry[0], RedisStream):
-                            items = entry[0].get_after(tid)
-                            if items: results.append((k, items))
-                    return results
-
-                with data_condition:
-                    final_results = get_results()
-                    if not final_results and block_ms is not None:
-                        if block_ms == 0:
-                            while not final_results:
-                                data_condition.wait()
-                                final_results = get_results()
+                        # Process queue
+                        if not transaction_queue:
+                            client_connection.send(b"*0\r\n")
                         else:
-                            data_condition.wait(timeout=block_ms/1000)
-                            final_results = get_results()
-                if not final_results: client_connection.send(b"*-1\r\n")
-                else:
-                    res = f"*{len(final_results)}\r\n".encode()
-                    for k, items in final_results:
-                        res += b"*2\r\n" + b"$" + str(len(k)).encode() + b"\r\n" + k + b"\r\n"
-                        res += f"*{len(items)}\r\n".encode()
-                        for eid, fields in items: res += encode_stream_entry(eid, fields)
-                    client_connection.send(res)
-
-            elif cmd == b"RPUSH" or cmd == b"LPUSH":
-                key, new_vals = parts[4], parts[6:-1:2]
-                with data_condition:
-                    if key not in data_store: data_store[key] = ([], None)
-                    d_list, _ = data_store[key]
-                    for v in new_vals:
-                        if cmd == b"RPUSH": d_list.append(v)
-                        else: d_list.insert(0, v)
-                    data_condition.notify_all()
-                client_connection.send(f":{len(d_list)}\r\n".encode())
-
-            elif cmd == b"LRANGE":
-                key, s, e = parts[4], int(parts[6]), int(parts[8])
-                entry = data_store.get(key)
-                if not entry or not isinstance(entry[0], list): client_connection.send(b"*0\r\n")
-                else:
-                    l = entry[0]
-                    def norm(i, n):
-                        if i < 0: i = n + i
-                        return max(0, min(i, n-1))
-                    si, ei = norm(s, len(l)), norm(e, len(l))
-                    sub = [] if (s >= len(l) or si > ei) else l[si : ei + 1]
-                    res = f"*{len(sub)}\r\n".encode()
-                    for i in sub: res += b"$" + str(len(i)).encode() + b"\r\n" + i + b"\r\n"
-                    client_connection.send(res)
-
-            elif cmd == b"LLEN":
-                entry = data_store.get(parts[4])
-                client_connection.send(f":{len(entry[0])}\r\n".encode() if entry and isinstance(entry[0], list) else b":0\r\n")
-
-            elif cmd == b"LPOP":
-                key, cnt = parts[4], int(parts[6]) if len(parts) > 6 else None
-                with data_condition:
-                    entry = data_store.get(key)
-                    if not entry or not isinstance(entry[0], list) or len(entry[0]) == 0: client_connection.send(b"$-1\r\n")
-                    else:
-                        l = entry[0]
-                        if cnt is None:
-                            v = l.pop(0)
-                            client_connection.send(b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n")
-                        else:
-                            p = [l.pop(0) for _ in range(min(cnt, len(l)))]
-                            res = f"*{len(p)}\r\n".encode()
-                            for i in p: res += b"$" + str(len(i)).encode() + b"\r\n" + i + b"\r\n"
+                            res = f"*{len(transaction_queue)}\r\n".encode()
+                            for q_cmd, q_args in transaction_queue:
+                                res += process_command(q_cmd, q_args)
                             client_connection.send(res)
-
-            elif cmd == b"BLPOP":
-                key, tval = parts[4], float(parts[-2])
-                def get_p():
-                    ent = data_store.get(key)
-                    return ent[0].pop(0) if ent and isinstance(ent[0], list) and len(ent[0]) > 0 else None
-                with data_condition:
-                    v = get_p()
-                    if tval == 0:
-                        while v is None: data_condition.wait(); v = get_p()
+                        in_transaction = False
+                        transaction_queue = []
+                else:
+                    if in_transaction:
+                        transaction_queue.append((cmd, cmd_args))
+                        client_connection.send(b"+QUEUED\r\n")
                     else:
-                        if v is None: data_condition.wait(timeout=tval); v = get_p()
-                if v is None: client_connection.send(b"*-1\r\n")
-                else: client_connection.send(f"*2\r\n${len(key)}\r\n".encode() + key + b"\r\n" + b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n")
-            elif cmd == b"PING": client_connection.send(b"+PONG\r\n")
+                        resp = process_command(cmd, cmd_args)
+                        client_connection.send(resp)
         except (ConnectionResetError, IndexError, ValueError): break
     client_connection.close()
 
