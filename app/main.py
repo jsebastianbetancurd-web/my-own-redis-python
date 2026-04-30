@@ -375,7 +375,18 @@ def process_command(cmd, args):
         members = zset.get_range(start, stop)
         return encode_resp_array(members)
     elif cmd == b"GEOADD":
-        # Placeholder for this stage
+        if len(args) < 4: return b"-ERR wrong number of arguments for 'geoadd' command\r\n"
+        try:
+            lon = float(args[1])
+            lat = float(args[2])
+        except ValueError:
+            return b"-ERR value is not a valid float\r\n"
+        
+        if not (-180 <= lon <= 180):
+            return f"-ERR invalid longitude {lon}\r\n".encode()
+        if not (-85.05112878 <= lat <= 85.05112878):
+            return f"-ERR invalid latitude {lat}\r\n".encode()
+            
         return b":1\r\n"
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
