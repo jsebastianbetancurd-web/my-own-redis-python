@@ -121,8 +121,9 @@ def encode_resp_array(args):
     res = f"*{len(args)}\r\n".encode()
     for arg in args:
         if isinstance(arg, int):
-            arg = str(arg).encode()
-        res += b"$" + str(len(arg)).encode() + b"\r\n" + arg + b"\r\n"
+            res += f":{arg}\r\n".encode()
+        else:
+            res += b"$" + str(len(arg)).encode() + b"\r\n" + arg + b"\r\n"
     return res
 
 def is_write_command(cmd):
@@ -553,6 +554,26 @@ def handle_client(client_connection):
                 elif cmd == b"UNWATCH":
                     watched_keys = {}
                     client_connection.send(b"+OK\r\n")
+                elif cmd == b"SUBSCRIBE":
+                    channels = cmd_args
+                    num_subs = 0
+                    for channel in channels:
+                        num_subs += 1
+                        res = encode_resp_array([b"subscribe", channel, num_subs])
+                        client_connection.send(res)
+                    
+                    # Enter subscription loop (simplified for this stage)
+                    while True:
+                        # In a real implementation, we would wait for messages here.
+                        # For this stage, we just need to keep the connection open.
+                        try:
+                            # We might receive more SUBSCRIBE or UNSUBSCRIBE commands,
+                            # but the task says we only handle it once for now.
+                            # Just blocking for now.
+                            time.sleep(1)
+                        except:
+                            break
+                    return
                 elif cmd == b"PSYNC":
                     resp = process_command(cmd, cmd_args)
                     client_connection.send(resp)
@@ -670,7 +691,7 @@ def replica_manager():
                 cmd_args = args[1:]
                 
                 if cmd == b"REPLCONF" and cmd_args and cmd_args[0].upper() == b"GETACK":
-                    master_conn.send(encode_resp_array([b"REPLCONF", b"ACK", offset]))
+                    master_conn.send(encode_resp_array([b"REPLCONF", b"ACK", str(offset).encode()]))
                 
                 process_command(cmd, cmd_args)
                 offset += consumed
