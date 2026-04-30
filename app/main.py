@@ -107,8 +107,13 @@ def process_command(cmd, args):
     elif cmd == b"REPLCONF":
         return b"+OK\r\n"
     elif cmd == b"PSYNC":
-        res_str = f"FULLRESYNC {config['master_replid']} {config['master_repl_offset']}"
-        return b"+" + res_str.encode() + b"\r\n"
+        res_str = f"FULLRESYNC {config['master_replid']} {config['master_repl_offset']}\r\n"
+        # Empty RDB file hex representation
+        rdb_hex = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000ff8c6e06255a95cb7d"
+        rdb_bytes = bytes.fromhex(rdb_hex)
+        res_bytes = b"+" + res_str.encode()
+        res_bytes += b"$" + str(len(rdb_bytes)).encode() + b"\r\n" + rdb_bytes
+        return res_bytes
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
