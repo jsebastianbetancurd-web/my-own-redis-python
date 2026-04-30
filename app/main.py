@@ -60,6 +60,17 @@ class RedisSortedSet:
         bisect.insort(self.sorted_members, (score, member))
         return 1 if is_new else 0
 
+    def rank(self, member):
+        if member not in self.members:
+            return None
+        score = self.members[member]
+        # Since sorted_members is sorted, we can find the index
+        # using bisect_left for efficiency, or just list.index since it's small for now.
+        # But wait, sorted_members is (score, member).
+        # bisect_left returns the leftmost insertion point.
+        idx = bisect.bisect_left(self.sorted_members, (score, member))
+        return idx
+
 class RedisStream:
     def __init__(self):
         self.entries = [] 
@@ -293,6 +304,17 @@ def process_command(cmd, args):
             added = zset.add(member, score)
             mark_modified(key)
         return f":{added}\r\n".encode()
+    elif cmd == b"ZRANK":
+        if len(args) < 2: return b"-ERR wrong number of arguments for 'zrank' command\r\n"
+        key, member = args[0], args[1]
+        entry = data_store.get(key)
+        if not entry or not isinstance(entry[0], RedisSortedSet):
+            return b"$-1\r\n"
+        zset = entry[0]
+        rank = zset.rank(member)
+        if rank is None:
+            return b"$-1\r\n"
+        return f":{rank}\r\n".encode()
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
