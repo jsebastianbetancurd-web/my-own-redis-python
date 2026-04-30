@@ -376,18 +376,40 @@ def process_command(cmd, args):
         return encode_resp_array(members)
     elif cmd == b"GEOADD":
         if len(args) < 4: return b"-ERR wrong number of arguments for 'geoadd' command\r\n"
+        key = args[0]
+        locations = []
         try:
-            lon = float(args[1])
-            lat = float(args[2])
+            for i in range(1, len(args), 3):
+                if i + 2 >= len(args): break
+                lon = float(args[i])
+                lat = float(args[i+1])
+                member = args[i+2]
+                
+                if not (-180 <= lon <= 180):
+                    return f"-ERR invalid longitude {lon}\r\n".encode()
+                if not (-85.05112878 <= lat <= 85.05112878):
+                    return f"-ERR invalid latitude {lat}\r\n".encode()
+                
+                locations.append((member, lon, lat))
         except ValueError:
             return b"-ERR value is not a valid float\r\n"
         
-        if not (-180 <= lon <= 180):
-            return f"-ERR invalid longitude {lon}\r\n".encode()
-        if not (-85.05112878 <= lat <= 85.05112878):
-            return f"-ERR invalid latitude {lat}\r\n".encode()
+        added_count = 0
+        with data_condition:
+            if key not in data_store:
+                data_store[key] = (RedisSortedSet(), None)
+            zset, expiry = data_store[key]
+            if not isinstance(zset, RedisSortedSet):
+                return b"-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
             
-        return b":1\r\n"
+            for member, lon, lat in locations:
+                # Store with score 0 for now as per task instructions
+                added_count += zset.add(member, 0)
+            
+            if added_count > 0:
+                mark_modified(key)
+                
+        return f":{added_count}\r\n".encode()
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
