@@ -515,6 +515,11 @@ def replica_manager():
                 
                 cmd = args[0].upper()
                 cmd_args = args[1:]
+                
+                # Replicas must respond to GETACK
+                if cmd == b"REPLCONF" and cmd_args and cmd_args[0].upper() == b"GETACK":
+                    master_conn.send(encode_resp_array([b"REPLCONF", b"ACK", b"0"]))
+                
                 # Replicas process commands silently
                 process_command(cmd, cmd_args)
 
