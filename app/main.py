@@ -14,7 +14,11 @@ config = {
     "master_port": None,
     "port": 6379,
     "dir": ".",
-    "dbfilename": "dump.rdb"
+    "dbfilename": "dump.rdb",
+    "appendonly": "no",
+    "appenddirname": "appendonlydir",
+    "appendfilename": "appendonly.aof",
+    "appendfsync": "everysec"
 }
 
 # Replicas tracking
