@@ -2,6 +2,8 @@ import socket
 import threading
 import time
 import argparse
+import os
+import struct
 
 # Global configuration
 config = {
@@ -16,7 +18,6 @@ config = {
 }
 
 # Replicas tracking
-# List of dicts: {"conn": socket, "ack_offset": 0}
 replicas = []
 replicas_lock = threading.Lock()
 replicas_condition = threading.Condition(replicas_lock)
@@ -129,6 +130,83 @@ def propagate(cmd, args):
             except:
                 pass
 
+def read_length(f):
+    b = f.read(1)
+    if not b: return None
+    b = b[0]
+    enc_type = (b & 0xC0) >> 6
+    if enc_type == 0:
+        return b & 0x3F
+    elif enc_type == 1:
+        next_b = f.read(1)[0]
+        return ((b & 0x3F) << 8) | next_b
+    elif enc_type == 2:
+        return struct.unpack(">I", f.read(4))[0]
+    elif enc_type == 3:
+        return (b & 0x3F, True) # Special encoding type
+    return None
+
+def read_string(f):
+    res = read_length(f)
+    if res is None: return None
+    if isinstance(res, tuple):
+        spec_type, is_special = res
+        if spec_type == 0: # 8-bit integer
+            val = f.read(1)[0]
+            return str(val).encode()
+        elif spec_type == 1: # 16-bit integer
+            val = struct.unpack("<H", f.read(2))[0]
+            return str(val).encode()
+        elif spec_type == 2: # 32-bit integer
+            val = struct.unpack("<I", f.read(4))[0]
+            return str(val).encode()
+        return None
+    return f.read(res)
+
+def load_rdb():
+    path = os.path.join(config["dir"], config["dbfilename"])
+    if not os.path.exists(path): return
+    
+    with open(path, "rb") as f:
+        magic = f.read(5)
+        if magic != b"REDIS": return
+        version = f.read(4) # skip version
+        
+        while True:
+            b = f.read(1)
+            if not b or b == b"\xFF": break # EOF
+            
+            if b == b"\xFA": # Metadata
+                read_string(f) # name
+                read_string(f) # value
+                continue
+            
+            if b == b"\xFE": # Select DB
+                read_length(f) # db index
+                continue
+            
+            if b == b"\xFB": # Resize DB
+                read_length(f) # total keys
+                read_length(f) # expires keys
+                continue
+            
+            expiry = None
+            if b == b"\xFC": # Expiry ms
+                expiry = struct.unpack("<Q", f.read(8))[0] / 1000.0
+                value_type = f.read(1)[0]
+            elif b == b"\xFD": # Expiry s
+                expiry = struct.unpack("<I", f.read(4))[0]
+                value_type = f.read(1)[0]
+            else:
+                value_type = b[0]
+            
+            key = read_string(f)
+            value = read_string(f) # Assumes string for now
+            
+            if key and value:
+                with data_condition:
+                    data_store[key] = (value, expiry)
+
 def process_command(cmd, args):
     cmd = cmd.upper()
     if cmd == b"PING":
@@ -143,10 +221,6 @@ def process_command(cmd, args):
         res_bytes += b"$" + str(len(rdb_bytes)).encode() + b"\r\n" + rdb_bytes
         return res_bytes
     elif cmd == b"WAIT":
-        num_replicas_needed = int(args[0])
-        timeout_ms = int(args[1])
-        # This is the short circuit for simple test stages
-        # Actual logic is inside handle_client to handle blocking
         return b":0\r\n"
     elif cmd == b"CONFIG":
         if len(args) >= 2 and args[0].upper() == b"GET":
@@ -154,6 +228,13 @@ def process_command(cmd, args):
             val = config.get(param, "")
             return encode_resp_array([param.encode(), str(val).encode()])
         return b"-ERR syntax error\r\n"
+    elif cmd == b"KEYS":
+        pattern = args[0]
+        if pattern == b"*":
+            with data_condition:
+                res = encode_resp_array(list(data_store.keys()))
+                return res
+        return encode_resp_array([])
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
@@ -578,12 +659,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=6379)
     parser.add_argument("--replicaof", type=str)
-    parser.add_argument("--dir", type=str)
-    parser.add_argument("--dbfilename", type=str)
+    parser.add_argument("--dir", type=str, default=".")
+    parser.add_argument("--dbfilename", type=str, default="dump.rdb")
     args = parser.parse_args()
     config["port"] = args.port
-    if args.dir: config["dir"] = args.dir
-    if args.dbfilename: config["dbfilename"] = args.dbfilename
+    config["dir"] = args.dir
+    config["dbfilename"] = args.dbfilename
+    
+    load_rdb()
+    
     if args.replicaof:
         config["role"] = "slave"
         m_host, m_port = args.replicaof.split()
