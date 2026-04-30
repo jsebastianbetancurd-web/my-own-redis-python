@@ -313,6 +313,14 @@ def process_command(cmd, args):
             added = zset.add(member, score)
             mark_modified(key)
         return f":{added}\r\n".encode()
+    elif cmd == b"ZCARD":
+        if not args: return b"-ERR wrong number of arguments for 'zcard' command\r\n"
+        key = args[0]
+        entry = data_store.get(key)
+        if not entry or not isinstance(entry[0], RedisSortedSet):
+            return b":0\r\n"
+        zset = entry[0]
+        return f":{len(zset.members)}\r\n".encode()
     elif cmd == b"ZRANK":
         if len(args) < 2: return b"-ERR wrong number of arguments for 'zrank' command\r\n"
         key, member = args[0], args[1]
