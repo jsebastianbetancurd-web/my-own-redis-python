@@ -561,6 +561,8 @@ def handle_client(client_connection):
                 elif cmd == b"UNWATCH":
                     watched_keys = {}
                     client_connection.send(b"+OK\r\n")
+                elif cmd == b"PING" and subscribed_channels:
+                    client_connection.send(encode_resp_array([b"pong", b""]))
                 elif cmd == b"SUBSCRIBE":
                     for channel in cmd_args:
                         subscribed_channels.add(channel)
