@@ -34,6 +34,7 @@ aof_lock = threading.Lock()
 # In-memory database
 data_store = {}
 key_versions = {}
+# Condition variable for blocking commands
 data_condition = threading.Condition()
 
 def mark_modified(key):
@@ -686,6 +687,24 @@ def get_active_aof_file():
                 return os.path.join(aof_dir, parts[1])
     return None
 
+def load_aof():
+    if config["appendonly"] != "yes":
+        return
+    active_aof = get_active_aof_file()
+    if not active_aof or not os.path.exists(active_aof):
+        return
+    
+    with open(active_aof, "rb") as f:
+        data = f.read()
+        while data:
+            args, rest, consumed = parse_resp(data)
+            if not args:
+                break
+            cmd = args[0].upper()
+            cmd_args = args[1:]
+            process_command(cmd, cmd_args)
+            data = rest
+
 def main():
     global aof_handle
     parser = argparse.ArgumentParser()
@@ -706,24 +725,27 @@ def main():
     config["appendfilename"] = args.appendfilename
     config["appendfsync"] = args.appendfsync
     
+    # Initialize directory and manifest if they don't exist
     if config["appendonly"] == "yes":
         aof_dir = os.path.join(config["dir"], config["appenddirname"])
         os.makedirs(aof_dir, exist_ok=True)
-        # Default files creation if not exist
-        aof_file = os.path.join(aof_dir, config["appendfilename"] + ".1.incr.aof")
-        if not os.path.exists(aof_file):
-            with open(aof_file, "w"): pass
         manifest_file = os.path.join(aof_dir, config["appendfilename"] + ".manifest")
         if not os.path.exists(manifest_file):
+            aof_file = os.path.join(aof_dir, config["appendfilename"] + ".1.incr.aof")
+            if not os.path.exists(aof_file):
+                with open(aof_file, "w"): pass
             with open(manifest_file, "w") as f:
                 f.write(f"file {config['appendfilename']}.1.incr.aof seq 1 type i\n")
-        
-        # Read manifest to find active AOF
+    
+    # Replay commands BEFORE opening for append
+    load_aof()
+    load_rdb()
+    
+    # Open for append
+    if config["appendonly"] == "yes":
         active_aof = get_active_aof_file()
         if active_aof:
             aof_handle = open(active_aof, "ab")
-    
-    load_rdb()
     
     if args.replicaof:
         config["role"] = "slave"
