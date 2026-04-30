@@ -29,7 +29,6 @@ replicas_lock = threading.Lock()
 replicas_condition = threading.Condition(replicas_lock)
 
 # Pub/Sub tracking
-# channel -> set(client_connections)
 pubsub_subscriptions = {}
 pubsub_lock = threading.Lock()
 
@@ -47,8 +46,8 @@ def mark_modified(key):
 
 class RedisSortedSet:
     def __init__(self):
-        self.members = {} # member -> score
-        self.sorted_members = [] # list of (score, member)
+        self.members = {} 
+        self.sorted_members = [] 
 
     def add(self, member, score):
         is_new = member not in self.members
@@ -64,22 +63,21 @@ class RedisSortedSet:
         if member not in self.members:
             return None
         score = self.members[member]
-        # Since sorted_members is sorted, we can find the index
-        # using bisect_left for efficiency, or just list.index since it's small for now.
-        # But wait, sorted_members is (score, member).
-        # bisect_left returns the leftmost insertion point.
         idx = bisect.bisect_left(self.sorted_members, (score, member))
         return idx
 
     def get_range(self, start, stop):
-        # Redis ZRANGE is inclusive
-        if start < 0: start = 0
         n = len(self.sorted_members)
+        if n == 0: return []
+        if start < 0:
+            start = n + start
+            if start < 0: start = 0
+        if stop < 0:
+            stop = n + stop
+            if stop < 0: stop = 0
         if start >= n: return []
-        if stop < 0: stop = n - 1 # actually Redis handles negative indexes differently, but task says non-negative for now
         if stop >= n: stop = n - 1
         if start > stop: return []
-        
         return [m[1] for m in self.sorted_members[start : stop + 1]]
 
 class RedisStream:
