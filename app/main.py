@@ -80,6 +80,13 @@ class RedisSortedSet:
         if start > stop: return []
         return [m[1] for m in self.sorted_members[start : stop + 1]]
 
+    def rem(self, member):
+        if member in self.members:
+            score = self.members.pop(member)
+            self.sorted_members.remove((score, member))
+            return 1
+        return 0
+
 class RedisStream:
     def __init__(self):
         self.entries = [] 
@@ -167,7 +174,7 @@ def encode_resp_array(args):
     return res
 
 def is_write_command(cmd):
-    return cmd.upper() in [b"SET", b"INCR", b"XADD", b"RPUSH", b"LPUSH", b"LPOP", b"ZADD"]
+    return cmd.upper() in [b"SET", b"INCR", b"XADD", b"RPUSH", b"LPUSH", b"LPOP", b"ZADD", b"ZREM"]
 
 def propagate(cmd, args):
     resp_cmd = encode_resp_array([cmd] + list(args))
@@ -313,6 +320,18 @@ def process_command(cmd, args):
             added = zset.add(member, score)
             mark_modified(key)
         return f":{added}\r\n".encode()
+    elif cmd == b"ZREM":
+        if len(args) < 2: return b"-ERR wrong number of arguments for 'zrem' command\r\n"
+        key, member = args[0], args[1]
+        with data_condition:
+            entry = data_store.get(key)
+            if not entry or not isinstance(entry[0], RedisSortedSet):
+                return b":0\r\n"
+            zset = entry[0]
+            removed = zset.rem(member)
+            if removed:
+                mark_modified(key)
+        return f":{removed}\r\n".encode()
     elif cmd == b"ZCARD":
         if not args: return b"-ERR wrong number of arguments for 'zcard' command\r\n"
         key = args[0]
@@ -342,14 +361,6 @@ def process_command(cmd, args):
         if member not in zset.members:
             return b"$-1\r\n"
         score = zset.members[member]
-        # Redis returns score as string, often without trailing zeros if they are decimals
-        # e.g. 20.0 -> "20", 30.1 -> "30.1"
-        # However, the task says: "30.1" for 30.1.
-        # Python's str(float) might keep .0 for integers.
-        # Let's use format to match Redis style: %g or similar.
-        # Redis actually uses a custom d2string.
-        # Let's try str(score) first and see if it passes.
-        # If score is integer-like, we might need to strip .0.
         score_str = str(score)
         if score_str.endswith(".0"):
             score_str = score_str[:-2]
@@ -615,7 +626,6 @@ def handle_client(client_connection):
                 cmd = args[0].upper()
                 cmd_args = args[1:]
                 
-                # Check for Subscribed Mode
                 allowed_in_subscribed = {b"SUBSCRIBE", b"UNSUBSCRIBE", b"PSUBSCRIBE", b"PUNSUBSCRIBE", b"PING", b"QUIT", b"RESET"}
                 if subscribed_channels and cmd not in allowed_in_subscribed:
                     client_connection.send(f"-ERR Can't execute '{cmd.decode().lower()}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context\r\n".encode())
@@ -840,7 +850,7 @@ def get_active_aof_file():
     with open(manifest_path, "r") as f:
         for line in f:
             parts = line.split()
-            if len(parts) >= 6 and parts[0] == "file" and parts[5] == "i":
+            if len(parts) >= 6 and parts[0] == "file" and parts[1].endswith(".aof"):
                 return os.path.join(aof_dir, parts[1])
     return None
 
