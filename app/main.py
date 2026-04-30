@@ -678,6 +678,10 @@ def main():
     config["appendfilename"] = args.appendfilename
     config["appendfsync"] = args.appendfsync
     
+    if config["appendonly"] == "yes":
+        aof_dir = os.path.join(config["dir"], config["appenddirname"])
+        os.makedirs(aof_dir, exist_ok=True)
+    
     load_rdb()
     
     if args.replicaof:
