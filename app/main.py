@@ -104,6 +104,8 @@ def process_command(cmd, args):
     cmd = cmd.upper()
     if cmd == b"PING":
         return b"+PONG\r\n"
+    elif cmd == b"REPLCONF":
+        return b"+OK\r\n"
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
