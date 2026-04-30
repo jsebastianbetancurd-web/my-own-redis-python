@@ -353,7 +353,7 @@ def process_command(cmd, args):
             return b"$7\r\ndefault\r\n"
         if len(args) >= 2 and args[0].upper() == b"GETUSER":
             if args[1] == b"default":
-                return b"*2\r\n$5\r\nflags\r\n*1\r\n$6\r\nnopass\r\n"
+                return b"*4\r\n$5\r\nflags\r\n*1\r\n$6\r\nnopass\r\n$9\r\npasswords\r\n*0\r\n"
         return b"-ERR unknown command\r\n"
     elif cmd == b"KEYS":
         pattern = args[0]
