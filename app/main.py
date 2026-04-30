@@ -332,6 +332,28 @@ def process_command(cmd, args):
         if rank is None:
             return b"$-1\r\n"
         return f":{rank}\r\n".encode()
+    elif cmd == b"ZSCORE":
+        if len(args) < 2: return b"-ERR wrong number of arguments for 'zscore' command\r\n"
+        key, member = args[0], args[1]
+        entry = data_store.get(key)
+        if not entry or not isinstance(entry[0], RedisSortedSet):
+            return b"$-1\r\n"
+        zset = entry[0]
+        if member not in zset.members:
+            return b"$-1\r\n"
+        score = zset.members[member]
+        # Redis returns score as string, often without trailing zeros if they are decimals
+        # e.g. 20.0 -> "20", 30.1 -> "30.1"
+        # However, the task says: "30.1" for 30.1.
+        # Python's str(float) might keep .0 for integers.
+        # Let's use format to match Redis style: %g or similar.
+        # Redis actually uses a custom d2string.
+        # Let's try str(score) first and see if it passes.
+        # If score is integer-like, we might need to strip .0.
+        score_str = str(score)
+        if score_str.endswith(".0"):
+            score_str = score_str[:-2]
+        return b"$" + str(len(score_str)).encode() + b"\r\n" + score_str.encode() + b"\r\n"
     elif cmd == b"ZRANGE":
         if len(args) < 3: return b"-ERR wrong number of arguments for 'zrange' command\r\n"
         key, start, stop = args[0], int(args[1]), int(args[2])
