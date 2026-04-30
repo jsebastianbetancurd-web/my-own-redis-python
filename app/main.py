@@ -665,10 +665,18 @@ def main():
     parser.add_argument("--replicaof", type=str)
     parser.add_argument("--dir", type=str)
     parser.add_argument("--dbfilename", type=str, default="dump.rdb")
+    parser.add_argument("--appendonly", type=str, default="no")
+    parser.add_argument("--appenddirname", type=str, default="appendonlydir")
+    parser.add_argument("--appendfilename", type=str, default="appendonly.aof")
+    parser.add_argument("--appendfsync", type=str, default="everysec")
     args = parser.parse_args()
     config["port"] = args.port
     config["dir"] = args.dir if args.dir else os.getcwd()
     config["dbfilename"] = args.dbfilename
+    config["appendonly"] = args.appendonly
+    config["appenddirname"] = args.appenddirname
+    config["appendfilename"] = args.appendfilename
+    config["appendfsync"] = args.appendfsync
     
     load_rdb()
     
