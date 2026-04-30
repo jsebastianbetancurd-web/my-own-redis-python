@@ -5,7 +5,9 @@ import argparse
 
 # Global configuration
 config = {
-    "role": "master"
+    "role": "master",
+    "master_replid": "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
+    "master_repl_offset": 0
 }
 
 # In-memory database
@@ -101,8 +103,12 @@ def process_command(cmd, args):
         return b"+PONG\r\n"
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
-            role = config["role"]
-            res_str = f"role:{role}"
+            res_parts = [
+                f"role:{config['role']}",
+                f"master_replid:{config['master_replid']}",
+                f"master_repl_offset:{config['master_repl_offset']}"
+            ]
+            res_str = "\n".join(res_parts)
             return b"$" + str(len(res_str)).encode() + b"\r\n" + res_str.encode() + b"\r\n"
         return b"-ERR syntax error\r\n"
     elif cmd == b"ECHO":
