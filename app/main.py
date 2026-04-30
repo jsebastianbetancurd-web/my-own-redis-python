@@ -4,6 +4,7 @@ import time
 import argparse
 import os
 import struct
+import sys
 
 # Global configuration
 config = {
@@ -22,6 +23,7 @@ config = {
 }
 
 # Replicas tracking
+# List of dicts: {"conn": socket, "ack_offset": 0}
 replicas = []
 replicas_lock = threading.Lock()
 replicas_condition = threading.Condition(replicas_lock)
@@ -681,6 +683,9 @@ def main():
     if config["appendonly"] == "yes":
         aof_dir = os.path.join(config["dir"], config["appenddirname"])
         os.makedirs(aof_dir, exist_ok=True)
+        aof_file = os.path.join(aof_dir, config["appendfilename"] + ".1.incr.aof")
+        with open(aof_file, "w") as f:
+            pass
     
     load_rdb()
     
