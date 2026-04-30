@@ -830,6 +830,17 @@ def handle_client(client_connection):
     transaction_queue = []
     watched_keys = {}
     subscribed_channels = set()
+    
+    # Authentication state
+    current_user = "default"
+    # A connection is authenticated if the user has 'nopass' OR if they've successfully AUTH'd.
+    # New connections start as 'default'.
+    def is_authenticated():
+        user = users.get(current_user)
+        if not user: return False
+        return "nopass" in user["flags"]
+
+    authenticated = is_authenticated()
 
     try:
         while True:
@@ -843,10 +854,28 @@ def handle_client(client_connection):
                 
                 cmd = args[0].upper()
                 cmd_args = args[1:]
+
+                # AUTH and HELLO are always allowed. PING is also allowed without AUTH in some Redis versions,
+                # but the instructions suggest returning NOAUTH for commands if not authenticated.
+                # However, AUTH must be allowed to perform authentication.
+                if not authenticated and cmd not in {b"AUTH", b"HELLO"}:
+                    client_connection.send(b"-NOAUTH Authentication required.\r\n")
+                    continue
                 
                 allowed_in_subscribed = {b"SUBSCRIBE", b"UNSUBSCRIBE", b"PSUBSCRIBE", b"PUNSUBSCRIBE", b"PING", b"QUIT", b"RESET"}
                 if subscribed_channels and cmd not in allowed_in_subscribed:
                     client_connection.send(f"-ERR Can't execute '{cmd.decode().lower()}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context\r\n".encode())
+                    continue
+
+                if cmd == b"AUTH":
+                    resp = process_command(cmd, cmd_args)
+                    if resp == b"+OK\r\n":
+                        authenticated = True
+                        if len(cmd_args) >= 2:
+                            current_user = cmd_args[0].decode()
+                        elif len(cmd_args) == 1:
+                            current_user = "default"
+                    client_connection.send(resp)
                     continue
 
                 if cmd == b"MULTI":
