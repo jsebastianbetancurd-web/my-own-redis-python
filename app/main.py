@@ -27,6 +27,11 @@ replicas = []
 replicas_lock = threading.Lock()
 replicas_condition = threading.Condition(replicas_lock)
 
+# Pub/Sub tracking
+# channel -> set(client_connections)
+pubsub_subscriptions = {}
+pubsub_lock = threading.Lock()
+
 # AOF state
 aof_handle = None
 aof_lock = threading.Lock()
@@ -34,7 +39,6 @@ aof_lock = threading.Lock()
 # In-memory database
 data_store = {}
 key_versions = {}
-# Condition variable for blocking commands
 data_condition = threading.Condition()
 
 def mark_modified(key):
@@ -189,7 +193,7 @@ def load_rdb():
     with open(path, "rb") as f:
         magic = f.read(5)
         if magic != b"REDIS": return
-        f.read(4) # version
+        f.read(4) 
         
         while True:
             b = f.read(1)
@@ -254,6 +258,13 @@ def process_command(cmd, args):
                 res = encode_resp_array(list(data_store.keys()))
                 return res
         return encode_resp_array([])
+    elif cmd == b"PUBLISH":
+        if len(args) < 2: return b"-ERR wrong number of arguments for 'publish' command\r\n"
+        channel = args[0]
+        with pubsub_lock:
+            subs = pubsub_subscriptions.get(channel, set())
+            count = len(subs)
+        return f":{count}\r\n".encode()
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
@@ -492,8 +503,8 @@ def handle_client(client_connection):
     watched_keys = {}
     subscribed_channels = set()
 
-    while True:
-        try:
+    try:
+        while True:
             data = client_connection.recv(4096)
             if not data: break
             
@@ -564,18 +575,20 @@ def handle_client(client_connection):
                 elif cmd == b"PING" and subscribed_channels:
                     client_connection.send(encode_resp_array([b"pong", b""]))
                 elif cmd == b"SUBSCRIBE":
-                    for channel in cmd_args:
-                        subscribed_channels.add(channel)
-                        res = encode_resp_array([b"subscribe", channel, len(subscribed_channels)])
-                        client_connection.send(res)
+                    with pubsub_lock:
+                        for channel in cmd_args:
+                            subscribed_channels.add(channel)
+                            if channel not in pubsub_subscriptions:
+                                pubsub_subscriptions[channel] = set()
+                            pubsub_subscriptions[channel].add(client_connection)
+                            res = encode_resp_array([b"subscribe", channel, len(subscribed_channels)])
+                            client_connection.send(res)
                 elif cmd == b"PSYNC":
                     resp = process_command(cmd, cmd_args)
                     client_connection.send(resp)
-                    
                     replica_info = {"conn": client_connection, "ack_offset": 0}
                     with replicas_lock:
                         replicas.append(replica_info)
-                    
                     while True:
                         rep_data = client_connection.recv(4096)
                         if not rep_data: break
@@ -592,14 +605,12 @@ def handle_client(client_connection):
                     num_replicas_needed = int(cmd_args[0])
                     timeout_ms = int(cmd_args[1])
                     current_offset = config["master_repl_offset"]
-                    
                     def get_in_sync_count():
                         count = 0
                         for r in replicas:
                             if r["ack_offset"] >= current_offset:
                                 count += 1
                         return count
-
                     start_time = time.time()
                     with replicas_lock:
                         if current_offset == 0:
@@ -608,7 +619,6 @@ def handle_client(client_connection):
                             getack_cmd = encode_resp_array([b"REPLCONF", b"GETACK", b"*"])
                             for r in replicas:
                                 r["conn"].send(getack_cmd)
-                            
                             while True:
                                 count = get_in_sync_count()
                                 if count >= num_replicas_needed:
@@ -617,7 +627,6 @@ def handle_client(client_connection):
                                 if elapsed >= timeout_ms:
                                     break
                                 replicas_condition.wait(timeout=(timeout_ms - elapsed) / 1000)
-                            
                             final_count = get_in_sync_count()
                             client_connection.send(f":{final_count}\r\n".encode())
                 else:
@@ -630,14 +639,20 @@ def handle_client(client_connection):
                         if is_write_command(cmd):
                             propagate(cmd, cmd_args)
                             write_to_aof([cmd] + list(cmd_args))
-        except (ConnectionResetError, IndexError, ValueError): break
-    
-    with replicas_lock:
-        for r in replicas:
-            if r["conn"] == client_connection:
-                replicas.remove(r)
-                break
-    client_connection.close()
+    except (ConnectionResetError, IndexError, ValueError, socket.error): pass
+    finally:
+        with pubsub_lock:
+            for channel in subscribed_channels:
+                if channel in pubsub_subscriptions:
+                    pubsub_subscriptions[channel].discard(client_connection)
+                    if not pubsub_subscriptions[channel]:
+                        del pubsub_subscriptions[channel]
+        with replicas_lock:
+            for r in replicas:
+                if r["conn"] == client_connection:
+                    replicas.remove(r)
+                    break
+        client_connection.close()
 
 def replica_manager():
     host = config["master_host"]
@@ -740,7 +755,6 @@ def main():
     config["appendfilename"] = args.appendfilename
     config["appendfsync"] = args.appendfsync
     
-    # Initialize directory and manifest if they don't exist
     if config["appendonly"] == "yes":
         aof_dir = os.path.join(config["dir"], config["appenddirname"])
         os.makedirs(aof_dir, exist_ok=True)
@@ -752,11 +766,9 @@ def main():
             with open(manifest_file, "w") as f:
                 f.write(f"file {config['appendfilename']}.1.incr.aof seq 1 type i\n")
     
-    # Replay commands BEFORE opening for append
     load_aof()
     load_rdb()
     
-    # Open for append
     if config["appendonly"] == "yes":
         active_aof = get_active_aof_file()
         if active_aof:
