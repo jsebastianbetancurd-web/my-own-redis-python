@@ -9,7 +9,8 @@ config = {
     "master_replid": "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
     "master_repl_offset": 0,
     "master_host": None,
-    "master_port": None
+    "master_port": None,
+    "port": 6379
 }
 
 # In-memory database
@@ -408,10 +409,18 @@ def handle_client(client_connection):
 def send_handshake():
     host = config["master_host"]
     port = config["master_port"]
+    replica_port = str(config["port"]).encode()
     with socket.create_connection((host, port)) as master_conn:
+        # 1. PING
         master_conn.send(b"*1\r\n$4\r\nPING\r\n")
-        # In this stage we just need to send it.
-        # Response handling might be needed in later stages.
+        master_conn.recv(4096)
+        
+        # 2. REPLCONF listening-port <PORT>
+        master_conn.send(b"*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" + str(len(replica_port)).encode() + b"\r\n" + replica_port + b"\r\n")
+        master_conn.recv(4096)
+        
+        # 3. REPLCONF capa psync2
+        master_conn.send(b"*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n")
         master_conn.recv(4096)
 
 def main():
@@ -419,6 +428,8 @@ def main():
     parser.add_argument("--port", type=int, default=6379)
     parser.add_argument("--replicaof", type=str)
     args = parser.parse_args()
+    
+    config["port"] = args.port
     
     if args.replicaof:
         config["role"] = "slave"
