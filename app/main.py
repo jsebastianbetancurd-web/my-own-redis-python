@@ -583,6 +583,18 @@ def handle_client(client_connection):
                             pubsub_subscriptions[channel].add(client_connection)
                             res = encode_resp_array([b"subscribe", channel, len(subscribed_channels)])
                             client_connection.send(res)
+                elif cmd == b"UNSUBSCRIBE":
+                    channels_to_unsub = cmd_args if cmd_args else list(subscribed_channels)
+                    with pubsub_lock:
+                        for channel in channels_to_unsub:
+                            if channel in subscribed_channels:
+                                subscribed_channels.remove(channel)
+                                if channel in pubsub_subscriptions:
+                                    pubsub_subscriptions[channel].discard(client_connection)
+                                    if not pubsub_subscriptions[channel]:
+                                        del pubsub_subscriptions[channel]
+                            res = encode_resp_array([b"unsubscribe", channel, len(subscribed_channels)])
+                            client_connection.send(res)
                 elif cmd == b"PSYNC":
                     resp = process_command(cmd, cmd_args)
                     client_connection.send(resp)
