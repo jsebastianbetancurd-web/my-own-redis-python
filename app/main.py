@@ -6,6 +6,7 @@ import os
 import struct
 import sys
 import bisect
+import math
 
 # Global configuration
 config = {
@@ -87,6 +88,15 @@ def geohash_decode(score):
     lat = lat_min + (lat_int + 0.5) * (lat_max - lat_min) / (1 << 26)
     
     return lon, lat
+
+def haversine_distance(lon1, lat1, lon2, lat2):
+    lon1, lat1, lon2, lat2 = map(math.radians, [lon1, lat1, lon2, lat2])
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    c = 2 * math.asin(math.sqrt(a))
+    r = 6372797.560856
+    return c * r
 
 class RedisSortedSet:
     def __init__(self):
@@ -478,6 +488,27 @@ def process_command(cmd, args):
             else:
                 res += b"*-1\r\n"
         return res
+    elif cmd == b"GEODIST":
+        if len(args) < 3: return b"-ERR wrong number of arguments for 'geodist' command\r\n"
+        key = args[0]
+        member1 = args[1]
+        member2 = args[2]
+        entry = data_store.get(key)
+        if not entry or not isinstance(entry[0], RedisSortedSet):
+            return b"$-1\r\n"
+        zset = entry[0]
+        if member1 not in zset.members or member2 not in zset.members:
+            return b"$-1\r\n"
+        
+        score1 = zset.members[member1]
+        score2 = zset.members[member2]
+        
+        lon1, lat1 = geohash_decode(int(score1))
+        lon2, lat2 = geohash_decode(int(score2))
+        
+        dist = haversine_distance(lon1, lat1, lon2, lat2)
+        dist_str = f"{dist:.4f}".encode()
+        return b"$" + str(len(dist_str)).encode() + b"\r\n" + dist_str + b"\r\n"
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
