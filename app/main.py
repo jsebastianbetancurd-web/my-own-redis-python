@@ -509,6 +509,39 @@ def process_command(cmd, args):
         dist = haversine_distance(lon1, lat1, lon2, lat2)
         dist_str = f"{dist:.4f}".encode()
         return b"$" + str(len(dist_str)).encode() + b"\r\n" + dist_str + b"\r\n"
+    elif cmd == b"GEOSEARCH":
+        if len(args) < 7: return b"-ERR wrong number of arguments for 'geosearch' command\r\n"
+        key = args[0]
+        # Expected: GEOSEARCH key FROMLONLAT <lon> <lat> BYRADIUS <radius> <unit>
+        try:
+            # Basic parsing as per requirement
+            center_lon = float(args[2])
+            center_lat = float(args[3])
+            radius = float(args[5])
+            unit = args[6].lower()
+        except (ValueError, IndexError):
+            return b"-ERR value is not a valid float\r\n"
+        
+        # Unit conversion to meters
+        # m: meters, km: kilometers, mi: miles, ft: feet
+        conv = {b"m": 1.0, b"km": 1000.0, b"mi": 1609.34, b"ft": 0.3048}
+        if unit not in conv:
+            return b"-ERR unsupported unit\r\n"
+        radius_in_meters = radius * conv[unit]
+        
+        entry = data_store.get(key)
+        if not entry or not isinstance(entry[0], RedisSortedSet):
+            return b"*0\r\n"
+        
+        zset = entry[0]
+        results = []
+        for member, score in zset.members.items():
+            lon, lat = geohash_decode(int(score))
+            dist = haversine_distance(center_lon, center_lat, lon, lat)
+            if dist <= radius_in_meters:
+                results.append(member)
+        
+        return encode_resp_array(results)
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
