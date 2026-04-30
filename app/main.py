@@ -138,6 +138,10 @@ def process_command(cmd, args):
         res_bytes = b"+" + res_str.encode()
         res_bytes += b"$" + str(len(rdb_bytes)).encode() + b"\r\n" + rdb_bytes
         return res_bytes
+    elif cmd == b"WAIT":
+        with replicas_lock:
+            count = len(replicas)
+        return f":{count}\r\n".encode()
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
