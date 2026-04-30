@@ -107,6 +107,8 @@ def encode_stream_entry(eid, fields):
 def encode_resp_array(args):
     res = f"*{len(args)}\r\n".encode()
     for arg in args:
+        if isinstance(arg, int):
+            arg = str(arg).encode()
         res += b"$" + str(len(arg)).encode() + b"\r\n" + arg + b"\r\n"
     return res
 
@@ -350,19 +352,23 @@ def process_command(cmd, args):
     return b"-ERR unknown command\r\n"
 
 def parse_resp(data):
-    if not data: return None, b""
-    if data[0:1] != b"*": return None, b""
+    if not data: return None, b"", 0
+    if data[0:1] != b"*": return None, b"", 0
     try:
-        lines = data.split(b"\r\n")
-        num_args = int(lines[0][1:])
+        idx = data.find(b"\r\n")
+        num_args = int(data[1:idx])
         args = []
-        curr = 1
+        curr_idx = idx + 2
         for _ in range(num_args):
-            if lines[curr][0:1] == b"$":
-                args.append(lines[curr+1])
-                curr += 2
-        return args, b"\r\n".join(lines[curr:])
-    except: return None, b""
+            idx = data.find(b"\r\n", curr_idx)
+            arg_len = int(data[curr_idx+1:idx])
+            curr_idx = idx + 2
+            arg = data[curr_idx:curr_idx+arg_len]
+            args.append(arg)
+            curr_idx += arg_len + 2
+        return args, data[curr_idx:], curr_idx
+    except:
+        return None, b"", 0
 
 def handle_client(client_connection):
     in_transaction = False
@@ -375,7 +381,7 @@ def handle_client(client_connection):
             if not data: break
             
             while data:
-                args, rest = parse_resp(data)
+                args, rest, _ = parse_resp(data)
                 if not args: break
                 data = rest
                 
@@ -413,7 +419,6 @@ def handle_client(client_connection):
                                 for q_cmd, q_args in transaction_queue:
                                     res += process_command(q_cmd, q_args)
                                 client_connection.send(res)
-                                # Propagate commands from transaction
                                 for q_cmd, q_args in transaction_queue:
                                     if is_write_command(q_cmd):
                                         propagate(q_cmd, q_args)
@@ -457,88 +462,65 @@ def replica_manager():
     host = config["master_host"]
     port = config["master_port"]
     replica_port = str(config["port"]).encode()
+    offset = 0
     with socket.create_connection((host, port)) as master_conn:
-        # 1. PING
         master_conn.send(b"*1\r\n$4\r\nPING\r\n")
         master_conn.recv(4096)
-        
-        # 2. REPLCONF listening-port <PORT>
         master_conn.send(b"*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" + str(len(replica_port)).encode() + b"\r\n" + replica_port + b"\r\n")
         master_conn.recv(4096)
-        
-        # 3. REPLCONF capa psync2
         master_conn.send(b"*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n")
         master_conn.recv(4096)
-        
-        # 4. PSYNC ? -1
         master_conn.send(b"*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n")
-        # Receive FULLRESYNC ...
         resp = master_conn.recv(4096)
         
-        # We need to skip the RDB file.
-        # It is sent as $<len>\r\n<contents>
-        # It might be in the same recv as FULLRESYNC or next.
-        
         def consume_rdb(data, conn):
-            # Find the start of RDB (it follows \r\n of FULLRESYNC)
-            # Or it might be the only thing in data if resp was split.
             if b"$" not in data:
                 data = conn.recv(4096)
-            
             idx = data.find(b"$")
             header = data[idx+1:]
             end_header = header.find(b"\r\n")
             while end_header == -1:
                 header += conn.recv(4096)
                 end_header = header.find(b"\r\n")
-            
             rdb_len = int(header[:end_header])
             content = header[end_header+2:]
-            
             while len(content) < rdb_len:
                 content += conn.recv(4096)
-            
-            return content[rdb_len:] # Return remaining data for next commands
+            return content[rdb_len:]
 
         remaining_data = consume_rdb(resp, master_conn)
         
-        # Process propagated commands
         while True:
             if not remaining_data:
                 remaining_data = master_conn.recv(4096)
             if not remaining_data: break
             
             while remaining_data:
-                args, rest = parse_resp(remaining_data)
+                args, rest, consumed = parse_resp(remaining_data)
                 if not args: break
                 remaining_data = rest
                 
                 cmd = args[0].upper()
                 cmd_args = args[1:]
                 
-                # Replicas must respond to GETACK
                 if cmd == b"REPLCONF" and cmd_args and cmd_args[0].upper() == b"GETACK":
-                    master_conn.send(encode_resp_array([b"REPLCONF", b"ACK", b"0"]))
+                    master_conn.send(encode_resp_array([b"REPLCONF", b"ACK", offset]))
                 
-                # Replicas process commands silently
                 process_command(cmd, cmd_args)
+                offset += consumed
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=6379)
     parser.add_argument("--replicaof", type=str)
     args = parser.parse_args()
-    
     config["port"] = args.port
-    
     if args.replicaof:
         config["role"] = "slave"
         m_host, m_port = args.replicaof.split()
         config["master_host"] = m_host
         config["master_port"] = int(m_port)
-        
         threading.Thread(target=replica_manager).start()
-    
     server_socket = socket.create_server(("localhost", args.port), reuse_port=True)
     while True:
         conn, _ = server_socket.accept()
