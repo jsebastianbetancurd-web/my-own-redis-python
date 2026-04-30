@@ -686,6 +686,9 @@ def main():
         aof_file = os.path.join(aof_dir, config["appendfilename"] + ".1.incr.aof")
         with open(aof_file, "w") as f:
             pass
+        manifest_file = os.path.join(aof_dir, config["appendfilename"] + ".manifest")
+        with open(manifest_file, "w") as f:
+            f.write(f"file {config['appendfilename']}.1.incr.aof seq 1 type i\n")
     
     load_rdb()
     
