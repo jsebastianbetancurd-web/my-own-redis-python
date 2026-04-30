@@ -9,6 +9,41 @@ import bisect
 import math
 import hashlib
 
+"""
+WELCOME TO THE REDIS CLONE! 🚀
+
+This is a multi-threaded, in-memory database built from scratch in Python.
+Here is the "Big Picture" of how this code is organized:
+
+1. GLOBAL STATE (Lines 40-90):
+   We use dictionaries to store data (data_store) and keep track of 
+   connected replicas, pub/sub channels, and security settings.
+
+2. CORE DATA STRUCTURES (Lines 90-250):
+   Custom classes like RedisSortedSet and RedisStream handle more 
+   complex data types beyond simple strings.
+
+3. RESP PROTOCOL (Lines 250-300):
+   Functions like parse_resp and encode_resp_array act as "translators" 
+   between the byte-language of the network and Python objects.
+
+4. PERSISTENCE (Lines 300-450):
+   Logic to read/write RDB files (snapshots) and AOF files (logs) 
+   so data isn't lost when the server restarts.
+
+5. COMMAND PROCESSING (Lines 450-900):
+   The 'process_command' function is the "brain"—it receives a command 
+   (like SET or GET) and decides what to do.
+
+6. CLIENT HANDLING (Lines 900-1150):
+   The 'handle_client' function manages the conversation with each 
+   person who connects to our server.
+
+7. THE MAIN LOOP (Lines 1150+):
+   This is where the server starts, listens for new connections, 
+   and spawns new threads for each client.
+"""
+
 # Global configuration
 config = {
     "role": "master",

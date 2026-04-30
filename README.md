@@ -1,60 +1,60 @@
-[![progress-banner](https://backend.codecrafters.io/progress/redis/b9472cee-855a-4274-aa34-0b967a106cf2)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
+# Redis-Inspired Key-Value Store (Python)
 
-This is a starting point for Python solutions to the
-["Build Your Own Redis" Challenge](https://codecrafters.io/challenges/redis).
+An educational, multi-threaded key-value store built from scratch in Python to explore the core principles of database internals. This project implements a functional subset of Redis features, including the RESP protocol, basic persistence, and replication.
 
-In this challenge, you'll build a toy Redis clone that's capable of handling
-basic commands like `PING`, `SET` and `GET`. Along the way we'll learn about
-event loops, the Redis protocol and more.
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
+![Redis](https://img.shields.io/badge/redis-RESP-red.svg)
+![Focus](https://img.shields.io/badge/focus-learning-orange.svg)
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+## 🚀 Overview
 
-# Passing the first stage
+This project was built to understand the "magic" behind modern data stores. By implementing a Redis clone, I explored how data travels over a network, how to manage concurrent access, and how distributed systems keep data in sync.
 
-The entry point for your Redis implementation is in `app/main.py`. Study and
-uncomment the relevant code, and push your changes to pass the first stage:
+### What I Implemented
 
-```sh
-git commit -am "pass 1st stage" # any msg
-git push origin master
-```
+- **Protocol Basics**: A manual parser for the **RESP (Redis Serialization Protocol)** to understand byte-level communication.
+- **Concurrency**: A multi-threaded approach to handle multiple clients, using basic thread synchronization.
+- **Data Handling**:
+  - **Strings & Sets**: Working with Python-native structures to manage key-value pairs and sorted data.
+  - **Streams**: Exploring append-only log structures.
+- **Persistence Foundations**: 
+  - **RDB & AOF**: Basic implementations of snapshotting and write-ahead logging to understand data durability.
+- **Distributed Basics**:
+  - **Replication**: A simple Master/Replica model to learn how commands are propagated across a network.
+- **Logic & Safety**: Simple transaction handling and geohashing for spatial data.
 
-That's all!
+## 🛠️ Technical Deep Dive
 
-# Stage 2 & beyond
+I documented my learning journey in these guides:
 
-Note: This section is for stages 2 and beyond.
+- 📖 **[Architecture & Concepts](./docs/ARCHITECTURE.md)**: A beginner-friendly breakdown of how this database works.
+- 📊 **[Data Engineering Fundamentals](./docs/DATA_ENGINEERING.md)**: How this project helped me build a foundation in data engineering.
+- 🕹️ **[Interactive Demo](./docs/DEMO.md)**: Step-by-step scenarios to see the database in action!
 
-1. Ensure you have `uv` installed locally
-1. Run `./your_program.sh` to run your Redis server, which is implemented in
-   `app/main.py`.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
+## 🚦 Getting Started
 
-# Troubleshooting
+### Prerequisites
+- Python 3.10+
+- `uv` (recommended)
 
-## module `socket` has no attribute `create_server`
+### Installation
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/your-username/codecrafters-redis-python.git
+   cd codecrafters-redis-python
+   ```
+2. Run the server:
+   ```bash
+   ./your_program.sh
+   ```
 
-When running your server locally, you might see an error like this:
+## 📈 Learning Focus: Junior Data Engineering
 
-```
-Traceback (most recent call last):
-  File "/.../python3.7/runpy.py", line 193, in _run_module_as_main
-    "__main__", mod_spec)
-  File "/.../python3.7/runpy.py", line 85, in _run_code
-    exec(code, run_globals)
-  File "/app/app/main.py", line 11, in <module>
-    main()
-  File "/app/app/main.py", line 6, in main
-    s = socket.create_server(("localhost", 6379), reuse_port=True)
-AttributeError: module 'socket' has no attribute 'create_server'
-```
+This project served as a practical lab to study:
+- **Data Flow**: How bytes are parsed and transformed into usable application state.
+- **Concurrency**: Learning to use locks and threads to prevent data corruption.
+- **Consistency**: Understanding the challenges of keeping two databases in sync.
+- **Storage Trade-offs**: Comparing the pros and cons of memory vs. disk storage.
 
-This is because `socket.create_server` was introduced in Python 3.8, and you
-might be running an older version.
-
-You can fix this by installing Python 3.8 locally and using that.
-
-If you'd like to use a different version of Python, change the `buildpack` value
-in `codecrafters.yml`.
+---
+*Built as a learning challenge on CodeCrafters.*
