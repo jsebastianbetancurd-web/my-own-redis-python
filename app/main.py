@@ -422,6 +422,10 @@ def send_handshake():
         # 3. REPLCONF capa psync2
         master_conn.send(b"*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n")
         master_conn.recv(4096)
+        
+        # 4. PSYNC ? -1
+        master_conn.send(b"*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n")
+        master_conn.recv(4096)
 
 def main():
     parser = argparse.ArgumentParser()
