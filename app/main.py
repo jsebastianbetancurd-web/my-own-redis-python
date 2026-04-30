@@ -667,7 +667,7 @@ def main():
     parser.add_argument("--dbfilename", type=str, default="dump.rdb")
     args = parser.parse_args()
     config["port"] = args.port
-    config["dir"] = args.dir
+    config["dir"] = args.dir if args.dir else os.getcwd()
     config["dbfilename"] = args.dbfilename
     
     load_rdb()
