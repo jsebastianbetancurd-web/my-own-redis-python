@@ -505,6 +505,12 @@ def handle_client(client_connection):
                 cmd = args[0].upper()
                 cmd_args = args[1:]
                 
+                # Check for Subscribed Mode
+                allowed_in_subscribed = {b"SUBSCRIBE", b"UNSUBSCRIBE", b"PSUBSCRIBE", b"PUNSUBSCRIBE", b"PING", b"QUIT", b"RESET"}
+                if subscribed_channels and cmd not in allowed_in_subscribed:
+                    client_connection.send(f"-ERR Can't execute '{cmd.decode().lower()}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context\r\n".encode())
+                    continue
+
                 if cmd == b"MULTI":
                     in_transaction = True
                     client_connection.send(b"+OK\r\n")
