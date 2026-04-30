@@ -490,6 +490,7 @@ def handle_client(client_connection):
     in_transaction = False
     transaction_queue = []
     watched_keys = {}
+    subscribed_channels = set()
 
     while True:
         try:
@@ -555,25 +556,10 @@ def handle_client(client_connection):
                     watched_keys = {}
                     client_connection.send(b"+OK\r\n")
                 elif cmd == b"SUBSCRIBE":
-                    channels = cmd_args
-                    num_subs = 0
-                    for channel in channels:
-                        num_subs += 1
-                        res = encode_resp_array([b"subscribe", channel, num_subs])
+                    for channel in cmd_args:
+                        subscribed_channels.add(channel)
+                        res = encode_resp_array([b"subscribe", channel, len(subscribed_channels)])
                         client_connection.send(res)
-                    
-                    # Enter subscription loop (simplified for this stage)
-                    while True:
-                        # In a real implementation, we would wait for messages here.
-                        # For this stage, we just need to keep the connection open.
-                        try:
-                            # We might receive more SUBSCRIBE or UNSUBSCRIBE commands,
-                            # but the task says we only handle it once for now.
-                            # Just blocking for now.
-                            time.sleep(1)
-                        except:
-                            break
-                    return
                 elif cmd == b"PSYNC":
                     resp = process_command(cmd, cmd_args)
                     client_connection.send(resp)
