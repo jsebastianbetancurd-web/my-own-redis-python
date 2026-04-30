@@ -663,7 +663,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=6379)
     parser.add_argument("--replicaof", type=str)
-    parser.add_argument("--dir", type=str, default=".")
+    parser.add_argument("--dir", type=str)
     parser.add_argument("--dbfilename", type=str, default="dump.rdb")
     args = parser.parse_args()
     config["port"] = args.port
