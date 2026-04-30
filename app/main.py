@@ -1,6 +1,7 @@
 import socket
 import threading
 import time
+import argparse
 
 # In-memory database
 # Stores: {key: (value, expiry_time)}
@@ -386,7 +387,11 @@ def handle_client(client_connection):
     client_connection.close()
 
 def main():
-    server_socket = socket.create_server(("localhost", 6379), reuse_port=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=6379)
+    args = parser.parse_args()
+    
+    server_socket = socket.create_server(("localhost", args.port), reuse_port=True)
     while True:
         conn, _ = server_socket.accept()
         threading.Thread(target=handle_client, args=(conn,)).start()
