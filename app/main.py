@@ -7,6 +7,7 @@ import struct
 import sys
 import bisect
 import math
+import hashlib
 
 # Global configuration
 config = {
@@ -22,6 +23,14 @@ config = {
     "appenddirname": "appendonlydir",
     "appendfilename": "appendonly.aof",
     "appendfsync": "everysec"
+}
+
+# Users state
+users = {
+    "default": {
+        "flags": ["nopass"],
+        "passwords": []
+    }
 }
 
 # Replicas tracking
@@ -223,6 +232,8 @@ def encode_resp_array(args):
     for arg in args:
         if isinstance(arg, int):
             res += f":{arg}\r\n".encode()
+        elif isinstance(arg, list):
+            res += encode_resp_array(arg)
         else:
             res += b"$" + str(len(arg)).encode() + b"\r\n" + arg + b"\r\n"
     return res
@@ -352,8 +363,25 @@ def process_command(cmd, args):
         if args and args[0].upper() == b"WHOAMI":
             return b"$7\r\ndefault\r\n"
         if len(args) >= 2 and args[0].upper() == b"GETUSER":
-            if args[1] == b"default":
-                return b"*4\r\n$5\r\nflags\r\n*1\r\n$6\r\nnopass\r\n$9\r\npasswords\r\n*0\r\n"
+            username = args[1].decode()
+            user = users.get(username)
+            if not user: return b"$-1\r\n"
+            flags_bytes = [f.encode() for f in user["flags"]]
+            passwords_bytes = [p.encode() for p in user["passwords"]]
+            return encode_resp_array([b"flags", flags_bytes, b"passwords", passwords_bytes])
+        if len(args) >= 2 and args[0].upper() == b"SETUSER":
+            username = args[1].decode()
+            if username not in users:
+                users[username] = {"flags": ["nopass"], "passwords": []}
+            user = users[username]
+            for rule in args[2:]:
+                if rule.startswith(b">"):
+                    password = rule[1:].decode()
+                    p_hash = hashlib.sha256(password.encode()).hexdigest()
+                    user["passwords"].append(p_hash)
+                    if "nopass" in user["flags"]:
+                        user["flags"].remove("nopass")
+            return b"+OK\r\n"
         return b"-ERR unknown command\r\n"
     elif cmd == b"KEYS":
         pattern = args[0]
