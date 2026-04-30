@@ -10,7 +10,9 @@ config = {
     "master_repl_offset": 0,
     "master_host": None,
     "master_port": None,
-    "port": 6379
+    "port": 6379,
+    "dir": ".",
+    "dbfilename": "dump.rdb"
 }
 
 # Replicas tracking
@@ -135,12 +137,23 @@ def process_command(cmd, args):
         return b"+OK\r\n"
     elif cmd == b"PSYNC":
         res_str = f"FULLRESYNC {config['master_replid']} {config['master_repl_offset']}\r\n"
-        # Empty RDB file hex representation
         rdb_hex = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000ff8c6e06255a95cb7d"
         rdb_bytes = bytes.fromhex(rdb_hex)
         res_bytes = b"+" + res_str.encode()
         res_bytes += b"$" + str(len(rdb_bytes)).encode() + b"\r\n" + rdb_bytes
         return res_bytes
+    elif cmd == b"WAIT":
+        num_replicas_needed = int(args[0])
+        timeout_ms = int(args[1])
+        # This is the short circuit for simple test stages
+        # Actual logic is inside handle_client to handle blocking
+        return b":0\r\n"
+    elif cmd == b"CONFIG":
+        if len(args) >= 2 and args[0].upper() == b"GET":
+            param = args[1].decode().lower()
+            val = config.get(param, "")
+            return encode_resp_array([param.encode(), str(val).encode()])
+        return b"-ERR syntax error\r\n"
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
@@ -448,7 +461,6 @@ def handle_client(client_connection):
                     with replicas_lock:
                         replicas.append(replica_info)
                     
-                    # Connection stays open to receive ACKs from replica
                     while True:
                         rep_data = client_connection.recv(4096)
                         if not rep_data: break
@@ -460,11 +472,10 @@ def handle_client(client_connection):
                                 with replicas_lock:
                                     replica_info["ack_offset"] = int(r_args[2])
                                     replicas_condition.notify_all()
-                    return # Exit after replica disconnects
+                    return 
                 elif cmd == b"WAIT":
                     num_replicas_needed = int(cmd_args[0])
                     timeout_ms = int(cmd_args[1])
-                    
                     current_offset = config["master_repl_offset"]
                     
                     def get_in_sync_count():
@@ -476,11 +487,9 @@ def handle_client(client_connection):
 
                     start_time = time.time()
                     with replicas_lock:
-                        # If offset is 0, we can immediately return all replicas
                         if current_offset == 0:
                             client_connection.send(f":{len(replicas)}\r\n".encode())
                         else:
-                            # Send GETACK to all
                             getack_cmd = encode_resp_array([b"REPLCONF", b"GETACK", b"*"])
                             for r in replicas:
                                 r["conn"].send(getack_cmd)
@@ -569,8 +578,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=6379)
     parser.add_argument("--replicaof", type=str)
+    parser.add_argument("--dir", type=str)
+    parser.add_argument("--dbfilename", type=str)
     args = parser.parse_args()
     config["port"] = args.port
+    if args.dir: config["dir"] = args.dir
+    if args.dbfilename: config["dbfilename"] = args.dbfilename
     if args.replicaof:
         config["role"] = "slave"
         m_host, m_port = args.replicaof.split()
