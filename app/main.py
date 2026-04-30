@@ -13,6 +13,10 @@ config = {
     "port": 6379
 }
 
+# Replicas tracking
+replicas = []
+replicas_lock = threading.Lock()
+
 # In-memory database
 # Stores: {key: (value, expiry_time)}
 data_store = {}
@@ -99,6 +103,24 @@ def encode_stream_entry(eid, fields):
         res += b"$" + str(len(f)).encode() + b"\r\n" + f + b"\r\n"
         res += b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n"
     return res
+
+def encode_resp_array(args):
+    res = f"*{len(args)}\r\n".encode()
+    for arg in args:
+        res += b"$" + str(len(arg)).encode() + b"\r\n" + arg + b"\r\n"
+    return res
+
+def is_write_command(cmd):
+    return cmd.upper() in [b"SET", b"INCR", b"XADD", b"RPUSH", b"LPUSH", b"LPOP"]
+
+def propagate(cmd, args):
+    resp_cmd = encode_resp_array([cmd] + list(args))
+    with replicas_lock:
+        for replica in replicas:
+            try:
+                replica.send(resp_cmd)
+            except:
+                pass
 
 def process_command(cmd, args):
     cmd = cmd.upper()
@@ -391,6 +413,10 @@ def handle_client(client_connection):
                                 for q_cmd, q_args in transaction_queue:
                                     res += process_command(q_cmd, q_args)
                                 client_connection.send(res)
+                                # Propagate commands from transaction
+                                for q_cmd, q_args in transaction_queue:
+                                    if is_write_command(q_cmd):
+                                        propagate(q_cmd, q_args)
                         
                         in_transaction = False
                         transaction_queue = []
@@ -406,6 +432,12 @@ def handle_client(client_connection):
                 elif cmd == b"UNWATCH":
                     watched_keys = {}
                     client_connection.send(b"+OK\r\n")
+                elif cmd == b"PSYNC":
+                    resp = process_command(cmd, cmd_args)
+                    client_connection.send(resp)
+                    with replicas_lock:
+                        replicas.append(client_connection)
+                    # Stay in loop to handle future commands from replica (like REPLCONF ACK)
                 else:
                     if in_transaction:
                         transaction_queue.append((cmd, cmd_args))
@@ -413,7 +445,14 @@ def handle_client(client_connection):
                     else:
                         resp = process_command(cmd, cmd_args)
                         client_connection.send(resp)
+                        if is_write_command(cmd):
+                            propagate(cmd, cmd_args)
         except (ConnectionResetError, IndexError, ValueError): break
+    
+    # Remove from replicas if it was there
+    with replicas_lock:
+        if client_connection in replicas:
+            replicas.remove(client_connection)
     client_connection.close()
 
 def send_handshake():
