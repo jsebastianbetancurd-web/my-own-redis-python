@@ -3,6 +3,11 @@ import threading
 import time
 import argparse
 
+# Global configuration
+config = {
+    "role": "master"
+}
+
 # In-memory database
 # Stores: {key: (value, expiry_time)}
 data_store = {}
@@ -96,7 +101,9 @@ def process_command(cmd, args):
         return b"+PONG\r\n"
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
-            return b"$11\r\nrole:master\r\n"
+            role = config["role"]
+            res_str = f"role:{role}"
+            return b"$" + str(len(res_str)).encode() + b"\r\n" + res_str.encode() + b"\r\n"
         return b"-ERR syntax error\r\n"
     elif cmd == b"ECHO":
         if not args: return b"-ERR wrong number of arguments for 'echo' command\r\n"
@@ -393,7 +400,11 @@ def handle_client(client_connection):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=6379)
+    parser.add_argument("--replicaof", type=str)
     args = parser.parse_args()
+    
+    if args.replicaof:
+        config["role"] = "slave"
     
     server_socket = socket.create_server(("localhost", args.port), reuse_port=True)
     while True:
