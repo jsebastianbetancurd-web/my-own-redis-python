@@ -44,6 +44,29 @@ data_condition = threading.Condition()
 def mark_modified(key):
     key_versions[key] = key_versions.get(key, 0) + 1
 
+def spread_bits(x):
+    x = (x | (x << 16)) & 0x0000FFFF0000FFFF
+    x = (x | (x << 8))  & 0x00FF00FF00FF00FF
+    x = (x | (x << 4))  & 0x0F0F0F0F0F0F0F0F
+    x = (x | (x << 2))  & 0x3333333333333333
+    x = (x | (x << 1))  & 0x5555555555555555
+    return x
+
+def geohash_encode(lon, lat):
+    lon_min, lon_max = -180, 180
+    lat_min, lat_max = -85.05112878, 85.05112878
+    
+    # Normalize and truncate to 26 bits
+    lon_int = int(((lon - lon_min) / (lon_max - lon_min)) * (2**26))
+    lat_int = int(((lat - lat_min) / (lat_max - lat_min)) * (2**26))
+    
+    # Clamp to max 26-bit value
+    lon_int = min(max(lon_int, 0), (2**26) - 1)
+    lat_int = min(max(lat_int, 0), (2**26) - 1)
+    
+    # Interleave
+    return (spread_bits(lon_int) << 1) | spread_bits(lat_int)
+
 class RedisSortedSet:
     def __init__(self):
         self.members = {} 
@@ -403,8 +426,8 @@ def process_command(cmd, args):
                 return b"-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
             
             for member, lon, lat in locations:
-                # Store with score 0 for now as per task instructions
-                added_count += zset.add(member, 0)
+                score = geohash_encode(lon, lat)
+                added_count += zset.add(member, score)
             
             if added_count > 0:
                 mark_modified(key)
