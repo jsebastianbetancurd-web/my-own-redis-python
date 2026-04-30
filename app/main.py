@@ -374,6 +374,9 @@ def process_command(cmd, args):
         zset = entry[0]
         members = zset.get_range(start, stop)
         return encode_resp_array(members)
+    elif cmd == b"GEOADD":
+        # Placeholder for this stage
+        return b":1\r\n"
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
