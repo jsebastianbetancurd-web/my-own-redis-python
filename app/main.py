@@ -383,6 +383,21 @@ def process_command(cmd, args):
                         user["flags"].remove("nopass")
             return b"+OK\r\n"
         return b"-ERR unknown command\r\n"
+    elif cmd == b"AUTH":
+        if len(args) < 2: return b"-ERR wrong number of arguments for 'auth' command\r\n"
+        username = args[0].decode()
+        password = args[1].decode()
+        user = users.get(username)
+        if not user:
+            return b"-WRONGPASS invalid username-password pair or user is disabled.\r\n"
+        
+        if "nopass" in user["flags"]:
+            return b"+OK\r\n"
+        
+        p_hash = hashlib.sha256(password.encode()).hexdigest()
+        if p_hash in user["passwords"]:
+            return b"+OK\r\n"
+        return b"-WRONGPASS invalid username-password pair or user is disabled.\r\n"
     elif cmd == b"KEYS":
         pattern = args[0]
         if pattern == b"*":
