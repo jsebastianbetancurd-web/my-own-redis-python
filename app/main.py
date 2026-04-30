@@ -437,7 +437,6 @@ def handle_client(client_connection):
                     client_connection.send(resp)
                     with replicas_lock:
                         replicas.append(client_connection)
-                    # Stay in loop to handle future commands from replica (like REPLCONF ACK)
                 else:
                     if in_transaction:
                         transaction_queue.append((cmd, cmd_args))
@@ -449,13 +448,12 @@ def handle_client(client_connection):
                             propagate(cmd, cmd_args)
         except (ConnectionResetError, IndexError, ValueError): break
     
-    # Remove from replicas if it was there
     with replicas_lock:
         if client_connection in replicas:
             replicas.remove(client_connection)
     client_connection.close()
 
-def send_handshake():
+def replica_manager():
     host = config["master_host"]
     port = config["master_port"]
     replica_port = str(config["port"]).encode()
@@ -474,7 +472,51 @@ def send_handshake():
         
         # 4. PSYNC ? -1
         master_conn.send(b"*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n")
-        master_conn.recv(4096)
+        # Receive FULLRESYNC ...
+        resp = master_conn.recv(4096)
+        
+        # We need to skip the RDB file.
+        # It is sent as $<len>\r\n<contents>
+        # It might be in the same recv as FULLRESYNC or next.
+        
+        def consume_rdb(data, conn):
+            # Find the start of RDB (it follows \r\n of FULLRESYNC)
+            # Or it might be the only thing in data if resp was split.
+            if b"$" not in data:
+                data = conn.recv(4096)
+            
+            idx = data.find(b"$")
+            header = data[idx+1:]
+            end_header = header.find(b"\r\n")
+            while end_header == -1:
+                header += conn.recv(4096)
+                end_header = header.find(b"\r\n")
+            
+            rdb_len = int(header[:end_header])
+            content = header[end_header+2:]
+            
+            while len(content) < rdb_len:
+                content += conn.recv(4096)
+            
+            return content[rdb_len:] # Return remaining data for next commands
+
+        remaining_data = consume_rdb(resp, master_conn)
+        
+        # Process propagated commands
+        while True:
+            if not remaining_data:
+                remaining_data = master_conn.recv(4096)
+            if not remaining_data: break
+            
+            while remaining_data:
+                args, rest = parse_resp(remaining_data)
+                if not args: break
+                remaining_data = rest
+                
+                cmd = args[0].upper()
+                cmd_args = args[1:]
+                # Replicas process commands silently
+                process_command(cmd, cmd_args)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -490,7 +532,7 @@ def main():
         config["master_host"] = m_host
         config["master_port"] = int(m_port)
         
-        threading.Thread(target=send_handshake).start()
+        threading.Thread(target=replica_manager).start()
     
     server_socket = socket.create_server(("localhost", args.port), reuse_port=True)
     while True:
