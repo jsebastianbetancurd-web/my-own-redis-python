@@ -351,6 +351,9 @@ def process_command(cmd, args):
     elif cmd == b"ACL":
         if args and args[0].upper() == b"WHOAMI":
             return b"$7\r\ndefault\r\n"
+        if len(args) >= 2 and args[0].upper() == b"GETUSER":
+            if args[1] == b"default":
+                return b"*2\r\n$5\r\nflags\r\n*0\r\n"
         return b"-ERR unknown command\r\n"
     elif cmd == b"KEYS":
         pattern = args[0]
