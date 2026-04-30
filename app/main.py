@@ -23,16 +23,17 @@ config = {
 }
 
 # Replicas tracking
-# List of dicts: {"conn": socket, "ack_offset": 0}
 replicas = []
 replicas_lock = threading.Lock()
 replicas_condition = threading.Condition(replicas_lock)
 
+# AOF state
+aof_handle = None
+aof_lock = threading.Lock()
+
 # In-memory database
-# Stores: {key: (value, expiry_time)}
 data_store = {}
 key_versions = {}
-# Condition variable for blocking commands
 data_condition = threading.Condition()
 
 def mark_modified(key):
@@ -40,8 +41,8 @@ def mark_modified(key):
 
 class RedisStream:
     def __init__(self):
-        self.entries = [] # List of tuples: (final_id_bytes, fields_dict)
-        self.last_id = (0, 0) # (time, seq)
+        self.entries = [] 
+        self.last_id = (0, 0) 
     
     def parse_id(self, id_bytes, is_end=False):
         if id_bytes == b"-": return (0, 0)
@@ -136,6 +137,16 @@ def propagate(cmd, args):
             except:
                 pass
 
+def write_to_aof(args):
+    global aof_handle
+    if not aof_handle: return
+    data = encode_resp_array(args)
+    with aof_lock:
+        aof_handle.write(data)
+        if config["appendfsync"] == "always":
+            aof_handle.flush()
+            os.fsync(aof_handle.fileno())
+
 def read_length(f):
     b = f.read(1)
     if not b: return None
@@ -149,7 +160,7 @@ def read_length(f):
     elif enc_type == 2:
         return struct.unpack(">I", f.read(4))[0]
     elif enc_type == 3:
-        return (b & 0x3F, True) # Special encoding type
+        return (b & 0x3F, True)
     return None
 
 def read_string(f):
@@ -157,13 +168,13 @@ def read_string(f):
     if res is None: return None
     if isinstance(res, tuple):
         spec_type, is_special = res
-        if spec_type == 0: # 8-bit integer
+        if spec_type == 0: 
             val = f.read(1)[0]
             return str(val).encode()
-        elif spec_type == 1: # 16-bit integer
+        elif spec_type == 1: 
             val = struct.unpack("<H", f.read(2))[0]
             return str(val).encode()
-        elif spec_type == 2: # 32-bit integer
+        elif spec_type == 2: 
             val = struct.unpack("<I", f.read(4))[0]
             return str(val).encode()
         return None
@@ -176,38 +187,38 @@ def load_rdb():
     with open(path, "rb") as f:
         magic = f.read(5)
         if magic != b"REDIS": return
-        version = f.read(4) # skip version
+        f.read(4) # version
         
         while True:
             b = f.read(1)
-            if not b or b == b"\xFF": break # EOF
+            if not b or b == b"\xFF": break 
             
-            if b == b"\xFA": # Metadata
-                read_string(f) # name
-                read_string(f) # value
+            if b == b"\xFA": 
+                read_string(f) 
+                read_string(f) 
                 continue
             
-            if b == b"\xFE": # Select DB
-                read_length(f) # db index
+            if b == b"\xFE": 
+                read_length(f) 
                 continue
             
-            if b == b"\xFB": # Resize DB
-                read_length(f) # total keys
-                read_length(f) # expires keys
+            if b == b"\xFB": 
+                read_length(f) 
+                read_length(f) 
                 continue
             
             expiry = None
-            if b == b"\xFC": # Expiry ms
+            if b == b"\xFC": 
                 expiry = struct.unpack("<Q", f.read(8))[0] / 1000.0
                 value_type = f.read(1)[0]
-            elif b == b"\xFD": # Expiry s
+            elif b == b"\xFD": 
                 expiry = struct.unpack("<I", f.read(4))[0]
                 value_type = f.read(1)[0]
             else:
                 value_type = b[0]
             
             key = read_string(f)
-            value = read_string(f) # Assumes string for now
+            value = read_string(f) 
             
             if key and value:
                 with data_condition:
@@ -525,6 +536,7 @@ def handle_client(client_connection):
                                 for q_cmd, q_args in transaction_queue:
                                     if is_write_command(q_cmd):
                                         propagate(q_cmd, q_args)
+                                        write_to_aof([q_cmd] + list(q_args))
                         
                         in_transaction = False
                         transaction_queue = []
@@ -601,6 +613,7 @@ def handle_client(client_connection):
                         client_connection.send(resp)
                         if is_write_command(cmd):
                             propagate(cmd, cmd_args)
+                            write_to_aof([cmd] + list(cmd_args))
         except (ConnectionResetError, IndexError, ValueError): break
     
     with replicas_lock:
@@ -661,7 +674,20 @@ def replica_manager():
                 process_command(cmd, cmd_args)
                 offset += consumed
 
+def get_active_aof_file():
+    aof_dir = os.path.join(config["dir"], config["appenddirname"])
+    manifest_path = os.path.join(aof_dir, config["appendfilename"] + ".manifest")
+    if not os.path.exists(manifest_path):
+        return None
+    with open(manifest_path, "r") as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) >= 6 and parts[0] == "file" and parts[5] == "i":
+                return os.path.join(aof_dir, parts[1])
+    return None
+
 def main():
+    global aof_handle
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=6379)
     parser.add_argument("--replicaof", type=str)
@@ -683,12 +709,19 @@ def main():
     if config["appendonly"] == "yes":
         aof_dir = os.path.join(config["dir"], config["appenddirname"])
         os.makedirs(aof_dir, exist_ok=True)
+        # Default files creation if not exist
         aof_file = os.path.join(aof_dir, config["appendfilename"] + ".1.incr.aof")
-        with open(aof_file, "w") as f:
-            pass
+        if not os.path.exists(aof_file):
+            with open(aof_file, "w"): pass
         manifest_file = os.path.join(aof_dir, config["appendfilename"] + ".manifest")
-        with open(manifest_file, "w") as f:
-            f.write(f"file {config['appendfilename']}.1.incr.aof seq 1 type i\n")
+        if not os.path.exists(manifest_file):
+            with open(manifest_file, "w") as f:
+                f.write(f"file {config['appendfilename']}.1.incr.aof seq 1 type i\n")
+        
+        # Read manifest to find active AOF
+        active_aof = get_active_aof_file()
+        if active_aof:
+            aof_handle = open(active_aof, "ab")
     
     load_rdb()
     
