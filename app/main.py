@@ -71,6 +71,17 @@ class RedisSortedSet:
         idx = bisect.bisect_left(self.sorted_members, (score, member))
         return idx
 
+    def get_range(self, start, stop):
+        # Redis ZRANGE is inclusive
+        if start < 0: start = 0
+        n = len(self.sorted_members)
+        if start >= n: return []
+        if stop < 0: stop = n - 1 # actually Redis handles negative indexes differently, but task says non-negative for now
+        if stop >= n: stop = n - 1
+        if start > stop: return []
+        
+        return [m[1] for m in self.sorted_members[start : stop + 1]]
+
 class RedisStream:
     def __init__(self):
         self.entries = [] 
@@ -315,6 +326,15 @@ def process_command(cmd, args):
         if rank is None:
             return b"$-1\r\n"
         return f":{rank}\r\n".encode()
+    elif cmd == b"ZRANGE":
+        if len(args) < 3: return b"-ERR wrong number of arguments for 'zrange' command\r\n"
+        key, start, stop = args[0], int(args[1]), int(args[2])
+        entry = data_store.get(key)
+        if not entry or not isinstance(entry[0], RedisSortedSet):
+            return b"*0\r\n"
+        zset = entry[0]
+        members = zset.get_range(start, stop)
+        return encode_resp_array(members)
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
