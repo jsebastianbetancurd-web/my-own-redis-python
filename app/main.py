@@ -629,6 +629,22 @@ def handle_client(client_connection):
                                 replicas_condition.wait(timeout=(timeout_ms - elapsed) / 1000)
                             final_count = get_in_sync_count()
                             client_connection.send(f":{final_count}\r\n".encode())
+                elif cmd == b"PUBLISH":
+                    if len(cmd_args) < 2:
+                        client_connection.send(b"-ERR wrong number of arguments for 'publish' command\r\n")
+                    else:
+                        channel = cmd_args[0]
+                        message = cmd_args[1]
+                        with pubsub_lock:
+                            subs = pubsub_subscriptions.get(channel, set()).copy()
+                            count = len(subs)
+                            client_connection.send(f":{count}\r\n".encode())
+                            msg_bytes = encode_resp_array([b"message", channel, message])
+                            for sub_conn in subs:
+                                try:
+                                    sub_conn.send(msg_bytes)
+                                except:
+                                    pass
                 else:
                     if in_transaction:
                         transaction_queue.append((cmd, cmd_args))
