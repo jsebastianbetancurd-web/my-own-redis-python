@@ -106,6 +106,9 @@ def process_command(cmd, args):
         return b"+PONG\r\n"
     elif cmd == b"REPLCONF":
         return b"+OK\r\n"
+    elif cmd == b"PSYNC":
+        res_str = f"FULLRESYNC {config['master_replid']} {config['master_repl_offset']}"
+        return b"+" + res_str.encode() + b"\r\n"
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
