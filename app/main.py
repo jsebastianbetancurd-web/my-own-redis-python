@@ -348,6 +348,10 @@ def process_command(cmd, args):
             val = config.get(param, "")
             return encode_resp_array([param.encode(), str(val).encode()])
         return b"-ERR syntax error\r\n"
+    elif cmd == b"ACL":
+        if args and args[0].upper() == b"WHOAMI":
+            return b"$7\r\ndefault\r\n"
+        return b"-ERR unknown command\r\n"
     elif cmd == b"KEYS":
         pattern = args[0]
         if pattern == b"*":
