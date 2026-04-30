@@ -5,6 +5,7 @@ import argparse
 import os
 import struct
 import sys
+import bisect
 
 # Global configuration
 config = {
@@ -43,6 +44,21 @@ data_condition = threading.Condition()
 
 def mark_modified(key):
     key_versions[key] = key_versions.get(key, 0) + 1
+
+class RedisSortedSet:
+    def __init__(self):
+        self.members = {} # member -> score
+        self.sorted_members = [] # list of (score, member)
+
+    def add(self, member, score):
+        is_new = member not in self.members
+        if not is_new:
+            old_score = self.members[member]
+            self.sorted_members.remove((old_score, member))
+        
+        self.members[member] = score
+        bisect.insort(self.sorted_members, (score, member))
+        return 1 if is_new else 0
 
 class RedisStream:
     def __init__(self):
@@ -131,7 +147,7 @@ def encode_resp_array(args):
     return res
 
 def is_write_command(cmd):
-    return cmd.upper() in [b"SET", b"INCR", b"XADD", b"RPUSH", b"LPUSH", b"LPOP"]
+    return cmd.upper() in [b"SET", b"INCR", b"XADD", b"RPUSH", b"LPUSH", b"LPOP", b"ZADD"]
 
 def propagate(cmd, args):
     resp_cmd = encode_resp_array([cmd] + list(args))
@@ -265,6 +281,18 @@ def process_command(cmd, args):
             subs = pubsub_subscriptions.get(channel, set())
             count = len(subs)
         return f":{count}\r\n".encode()
+    elif cmd == b"ZADD":
+        if len(args) < 3: return b"-ERR wrong number of arguments for 'zadd' command\r\n"
+        key, score, member = args[0], float(args[1]), args[2]
+        with data_condition:
+            if key not in data_store:
+                data_store[key] = (RedisSortedSet(), None)
+            zset, expiry = data_store[key]
+            if not isinstance(zset, RedisSortedSet):
+                return b"-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+            added = zset.add(member, score)
+            mark_modified(key)
+        return f":{added}\r\n".encode()
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
@@ -302,7 +330,7 @@ def process_command(cmd, args):
                     mark_modified(key)
                 return b"$-1\r\n"
             else:
-                if isinstance(val, (list, RedisStream)): return b"$-1\r\n"
+                if isinstance(val, (list, RedisStream, RedisSortedSet)): return b"$-1\r\n"
                 else: return b"$" + str(len(val)).encode() + b"\r\n" + val + b"\r\n"
         else: return b"$-1\r\n"
     elif cmd == b"INCR":
@@ -332,6 +360,7 @@ def process_command(cmd, args):
             v = entry[0]
             if isinstance(v, list): return b"+list\r\n"
             elif isinstance(v, RedisStream): return b"+stream\r\n"
+            elif isinstance(v, RedisSortedSet): return b"+zset\r\n"
             else: return b"+string\r\n"
     elif cmd == b"XADD":
         if len(args) < 4: return b"-ERR wrong number of arguments for 'xadd' command\r\n"
