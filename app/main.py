@@ -67,6 +67,27 @@ def geohash_encode(lon, lat):
     # Interleave
     return (spread_bits(lon_int) << 1) | spread_bits(lat_int)
 
+def squish_bits(x):
+    x &= 0x5555555555555555
+    x = (x | (x >> 1)) & 0x3333333333333333
+    x = (x | (x >> 2)) & 0x0F0F0F0F0F0F0F0F
+    x = (x | (x >> 4)) & 0x00FF00FF00FF00FF
+    x = (x | (x >> 8)) & 0x0000FFFF0000FFFF
+    x = (x | (x >> 16)) & 0x00000000FFFFFFFF
+    return x
+
+def geohash_decode(score):
+    lon_int = squish_bits(score >> 1)
+    lat_int = squish_bits(score)
+    
+    lon_min, lon_max = -180.0, 180.0
+    lat_min, lat_max = -85.05112878, 85.05112878
+    
+    lon = lon_min + (lon_int + 0.5) * (lon_max - lon_min) / (1 << 26)
+    lat = lat_min + (lat_int + 0.5) * (lat_max - lat_min) / (1 << 26)
+    
+    return lon, lat
+
 class RedisSortedSet:
     def __init__(self):
         self.members = {} 
@@ -448,8 +469,12 @@ def process_command(cmd, args):
         zset = entry[0]
         for member in members:
             if member in zset.members:
-                # Return placeholder '0', '0' for this stage
-                res += b"*2\r\n$1\r\n0\r\n$1\r\n0\r\n"
+                score = zset.members[member]
+                lon, lat = geohash_decode(int(score))
+                lon_str = str(lon).encode()
+                lat_str = str(lat).encode()
+                res += b"*2\r\n$" + str(len(lon_str)).encode() + b"\r\n" + lon_str + b"\r\n"
+                res += b"$" + str(len(lat_str)).encode() + b"\r\n" + lat_str + b"\r\n"
             else:
                 res += b"*-1\r\n"
         return res
