@@ -433,6 +433,26 @@ def process_command(cmd, args):
                 mark_modified(key)
                 
         return f":{added_count}\r\n".encode()
+    elif cmd == b"GEOPOS":
+        if len(args) < 2: return b"-ERR wrong number of arguments for 'geopos' command\r\n"
+        key = args[0]
+        members = args[1:]
+        entry = data_store.get(key)
+        
+        res = f"*{len(members)}\r\n".encode()
+        if not entry or not isinstance(entry[0], RedisSortedSet):
+            for _ in members:
+                res += b"*-1\r\n"
+            return res
+            
+        zset = entry[0]
+        for member in members:
+            if member in zset.members:
+                # Return placeholder '0', '0' for this stage
+                res += b"*2\r\n$1\r\n0\r\n$1\r\n0\r\n"
+            else:
+                res += b"*-1\r\n"
+        return res
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
