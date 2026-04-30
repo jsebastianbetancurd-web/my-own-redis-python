@@ -7,7 +7,9 @@ import argparse
 config = {
     "role": "master",
     "master_replid": "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
-    "master_repl_offset": 0
+    "master_repl_offset": 0,
+    "master_host": None,
+    "master_port": None
 }
 
 # In-memory database
@@ -403,6 +405,15 @@ def handle_client(client_connection):
         except (ConnectionResetError, IndexError, ValueError): break
     client_connection.close()
 
+def send_handshake():
+    host = config["master_host"]
+    port = config["master_port"]
+    with socket.create_connection((host, port)) as master_conn:
+        master_conn.send(b"*1\r\n$4\r\nPING\r\n")
+        # In this stage we just need to send it.
+        # Response handling might be needed in later stages.
+        master_conn.recv(4096)
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=6379)
@@ -411,6 +422,11 @@ def main():
     
     if args.replicaof:
         config["role"] = "slave"
+        m_host, m_port = args.replicaof.split()
+        config["master_host"] = m_host
+        config["master_port"] = int(m_port)
+        
+        threading.Thread(target=send_handshake).start()
     
     server_socket = socket.create_server(("localhost", args.port), reuse_port=True)
     while True:
