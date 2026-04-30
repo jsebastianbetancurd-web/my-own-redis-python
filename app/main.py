@@ -14,8 +14,10 @@ config = {
 }
 
 # Replicas tracking
+# List of dicts: {"conn": socket, "ack_offset": 0}
 replicas = []
 replicas_lock = threading.Lock()
+replicas_condition = threading.Condition(replicas_lock)
 
 # In-memory database
 # Stores: {key: (value, expiry_time)}
@@ -117,10 +119,11 @@ def is_write_command(cmd):
 
 def propagate(cmd, args):
     resp_cmd = encode_resp_array([cmd] + list(args))
+    config["master_repl_offset"] += len(resp_cmd)
     with replicas_lock:
-        for replica in replicas:
+        for replica_info in replicas:
             try:
-                replica.send(resp_cmd)
+                replica_info["conn"].send(resp_cmd)
             except:
                 pass
 
@@ -138,10 +141,6 @@ def process_command(cmd, args):
         res_bytes = b"+" + res_str.encode()
         res_bytes += b"$" + str(len(rdb_bytes)).encode() + b"\r\n" + rdb_bytes
         return res_bytes
-    elif cmd == b"WAIT":
-        with replicas_lock:
-            count = len(replicas)
-        return f":{count}\r\n".encode()
     elif cmd == b"INFO":
         if args and args[0].upper() == b"REPLICATION":
             res_parts = [
@@ -444,8 +443,59 @@ def handle_client(client_connection):
                 elif cmd == b"PSYNC":
                     resp = process_command(cmd, cmd_args)
                     client_connection.send(resp)
+                    
+                    replica_info = {"conn": client_connection, "ack_offset": 0}
                     with replicas_lock:
-                        replicas.append(client_connection)
+                        replicas.append(replica_info)
+                    
+                    # Connection stays open to receive ACKs from replica
+                    while True:
+                        rep_data = client_connection.recv(4096)
+                        if not rep_data: break
+                        while rep_data:
+                            r_args, r_rest, _ = parse_resp(rep_data)
+                            if not r_args: break
+                            rep_data = r_rest
+                            if r_args[0].upper() == b"REPLCONF" and len(r_args) >= 3 and r_args[1].upper() == b"ACK":
+                                with replicas_lock:
+                                    replica_info["ack_offset"] = int(r_args[2])
+                                    replicas_condition.notify_all()
+                    return # Exit after replica disconnects
+                elif cmd == b"WAIT":
+                    num_replicas_needed = int(cmd_args[0])
+                    timeout_ms = int(cmd_args[1])
+                    
+                    current_offset = config["master_repl_offset"]
+                    
+                    def get_in_sync_count():
+                        count = 0
+                        for r in replicas:
+                            if r["ack_offset"] >= current_offset:
+                                count += 1
+                        return count
+
+                    start_time = time.time()
+                    with replicas_lock:
+                        # If offset is 0, we can immediately return all replicas
+                        if current_offset == 0:
+                            client_connection.send(f":{len(replicas)}\r\n".encode())
+                        else:
+                            # Send GETACK to all
+                            getack_cmd = encode_resp_array([b"REPLCONF", b"GETACK", b"*"])
+                            for r in replicas:
+                                r["conn"].send(getack_cmd)
+                            
+                            while True:
+                                count = get_in_sync_count()
+                                if count >= num_replicas_needed:
+                                    break
+                                elapsed = (time.time() - start_time) * 1000
+                                if elapsed >= timeout_ms:
+                                    break
+                                replicas_condition.wait(timeout=(timeout_ms - elapsed) / 1000)
+                            
+                            final_count = get_in_sync_count()
+                            client_connection.send(f":{final_count}\r\n".encode())
                 else:
                     if in_transaction:
                         transaction_queue.append((cmd, cmd_args))
@@ -458,8 +508,10 @@ def handle_client(client_connection):
         except (ConnectionResetError, IndexError, ValueError): break
     
     with replicas_lock:
-        if client_connection in replicas:
-            replicas.remove(client_connection)
+        for r in replicas:
+            if r["conn"] == client_connection:
+                replicas.remove(r)
+                break
     client_connection.close()
 
 def replica_manager():
