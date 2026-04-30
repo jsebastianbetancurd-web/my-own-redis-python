@@ -94,6 +94,10 @@ def process_command(cmd, args):
     cmd = cmd.upper()
     if cmd == b"PING":
         return b"+PONG\r\n"
+    elif cmd == b"INFO":
+        if args and args[0].upper() == b"REPLICATION":
+            return b"$11\r\nrole:master\r\n"
+        return b"-ERR syntax error\r\n"
     elif cmd == b"ECHO":
         if not args: return b"-ERR wrong number of arguments for 'echo' command\r\n"
         msg = args[0]
