@@ -1199,7 +1199,7 @@ def main():
         config["master_host"] = m_host
         config["master_port"] = int(m_port)
         threading.Thread(target=replica_manager).start()
-    server_socket = socket.create_server(("localhost", args.port), reuse_port=True)
+    server_socket = socket.create_server(("localhost", args.port))
     while True:
         conn, _ = server_socket.accept()
         threading.Thread(target=handle_client, args=(conn,)).start()

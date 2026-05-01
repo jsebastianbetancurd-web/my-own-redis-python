@@ -37,15 +37,20 @@ I documented my learning journey in these guides:
 - Python 3.10+
 - `uv` (recommended)
 
-### Installation
+### Installation & Run
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/codecrafters-redis-python.git
+   git clone https://github.com/jsebastianbetancurd-web/my-own-redis-python.git
    cd codecrafters-redis-python
    ```
 2. Run the server:
+   - **Linux/macOS**: `./redis-server.sh`
+   - **Windows**: `uv run -m app.main`
+
+3. **Verify it's working**:
+   Open a second terminal and run this one-liner to send a `PING` and receive a `PONG`:
    ```bash
-   ./redis-server.sh
+   python -c "import socket; s=socket.socket(); s.connect(('127.0.0.1', 6379)); s.sendall(b'*1\r\n$4\r\nPING\r\n'); print(f'Server Response: {s.recv(1024).decode()}')"
    ```
 
 ## 📈 Learning Focus: Junior Data Engineering
