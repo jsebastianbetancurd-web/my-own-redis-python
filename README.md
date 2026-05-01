@@ -45,7 +45,7 @@ I documented my learning journey in these guides:
    ```
 2. Run the server:
    ```bash
-   ./your_program.sh
+   ./redis-server.sh
    ```
 
 ## 📈 Learning Focus: Junior Data Engineering

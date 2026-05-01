@@ -9,7 +9,7 @@ This guide provides step-by-step scenarios to interact with this Redis implement
 
 1.  **Start the Server**:
     ```bash
-    ./your_program.sh --port 6379
+    ./redis-server.sh --port 6379
     ```
 2.  **Open Client A (The Listener)**:
     ```bash
@@ -36,7 +36,7 @@ This guide provides step-by-step scenarios to interact with this Redis implement
 2.  **Kill the Server**: Press `Ctrl+C` in the server terminal.
 3.  **Restart the Server**:
     ```bash
-    ./your_program.sh
+    ./redis-server.sh
     ```
 4.  **Check the data**:
     ```bash
@@ -52,11 +52,11 @@ This guide provides step-by-step scenarios to interact with this Redis implement
 
 1.  **Start the Master (Port 6379)**:
     ```bash
-    ./your_program.sh --port 6379
+    ./redis-server.sh --port 6379
     ```
 2.  **Start the Replica (Port 6380)**:
     ```bash
-    ./your_program.sh --port 6380 --replicaof "localhost 6379"
+    ./redis-server.sh --port 6380 --replicaof "localhost 6379"
     ```
 3.  **Write to Master**:
     ```bash
