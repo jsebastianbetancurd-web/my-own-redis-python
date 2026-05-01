@@ -6,6 +6,8 @@ This document explains the "How" and "Why" behind this Redis implementation in s
 
 When you type `SET key value` in a Redis client, it doesn't just send that text. It translates it into a specific "language" called **RESP** (Redis Serialization Protocol).
 
+We moved all the parsing and encoding logic to its own module in **`app/resp.py`**. This makes it easy to test and reuse the protocol logic.
+
 Imagine you are sending a list of words. RESP formats it like this:
 - `*3` (This means: "I'm sending 3 things")
 - `$3\r\nSET` (This means: "The first thing is 3 characters long and it is 'SET'")

@@ -12,7 +12,7 @@ This project was built to understand the "magic" behind modern data stores. By i
 
 ### What I Implemented
 
-- **Protocol Basics**: A manual parser for the **RESP (Redis Serialization Protocol)** to understand byte-level communication.
+- **Protocol Basics**: A modular parser for the **RESP (Redis Serialization Protocol)** located in `app/resp.py`.
 - **Concurrency**: A multi-threaded approach to handle multiple clients, using basic thread synchronization.
 - **Data Handling**:
   - **Strings & Sets**: Working with Python-native structures to manage key-value pairs and sorted data.
@@ -27,7 +27,7 @@ This project was built to understand the "magic" behind modern data stores. By i
 
 I documented my learning journey in these guides:
 
-- 📖 **[Architecture & Concepts](./docs/ARCHITECTURE.md)**: A beginner-friendly breakdown of how this database works.
+- 📖 **[Architecture & Concepts](./docs/ARCHITECTURE.md)**: A beginner-friendly breakdown of how this database works and its modular structure.
 - 📊 **[Data Engineering Fundamentals](./docs/DATA_ENGINEERING.md)**: How this project helped me build a foundation in data engineering.
 - 🕹️ **[Interactive Demo](./docs/DEMO.md)**: Step-by-step scenarios to see the database in action!
 
@@ -43,15 +43,26 @@ I documented my learning journey in these guides:
    git clone https://github.com/jsebastianbetancurd-web/my-own-redis-python.git
    cd codecrafters-redis-python
    ```
-2. Run the server:
+2. Install dependencies (for tests):
+   ```bash
+   uv sync
+   ```
+3. Run the server:
    - **Linux/macOS**: `./redis-server.sh`
    - **Windows**: `uv run -m app.main`
 
-3. **Verify it's working**:
+4. **Verify it's working**:
    Open a second terminal and run this one-liner to send a `PING` and receive a `PONG`:
    ```bash
    python -c "import socket; s=socket.socket(); s.connect(('127.0.0.1', 6379)); s.sendall(b'*1\r\n$4\r\nPING\r\n'); print(f'Server Response: {s.recv(1024).decode()}')"
    ```
+
+### 🧪 Running Tests
+The project includes a comprehensive test suite using `pytest`.
+```bash
+uv run pytest
+```
+
 
 ## 📈 Learning Focus: Junior Data Engineering
 
