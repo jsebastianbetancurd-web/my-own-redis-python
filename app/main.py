@@ -8,6 +8,7 @@ import sys
 import bisect
 import math
 import hashlib
+from app.resp import parse_resp, encode_resp_array, encode_stream_entry
 
 """
 WELCOME TO THE REDIS CLONE! 🚀
@@ -252,26 +253,6 @@ class RedisStream:
             t, s = self.parse_id(eid)
             if (t, s) > (st, ss): results.append((eid, fields))
         return results
-
-def encode_stream_entry(eid, fields):
-    res = b"*2\r\n"
-    res += b"$" + str(len(eid)).encode() + b"\r\n" + eid + b"\r\n"
-    res += f"*{len(fields)*2}\r\n".encode()
-    for f, v in fields.items():
-        res += b"$" + str(len(f)).encode() + b"\r\n" + f + b"\r\n"
-        res += b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n"
-    return res
-
-def encode_resp_array(args):
-    res = f"*{len(args)}\r\n".encode()
-    for arg in args:
-        if isinstance(arg, int):
-            res += f":{arg}\r\n".encode()
-        elif isinstance(arg, list):
-            res += encode_resp_array(arg)
-        else:
-            res += b"$" + str(len(arg)).encode() + b"\r\n" + arg + b"\r\n"
-    return res
 
 def is_write_command(cmd):
     return cmd.upper() in [b"SET", b"INCR", b"XADD", b"RPUSH", b"LPUSH", b"LPOP", b"ZADD", b"ZREM"]
@@ -840,25 +821,6 @@ def process_command(cmd, args):
         if v is None: return b"*-1\r\n"
         else: return f"*2\r\n${len(key)}\r\n".encode() + key + b"\r\n" + b"$" + str(len(v)).encode() + b"\r\n" + v + b"\r\n"
     return b"-ERR unknown command\r\n"
-
-def parse_resp(data):
-    if not data: return None, b"", 0
-    if data[0:1] != b"*": return None, b"", 0
-    try:
-        idx = data.find(b"\r\n")
-        num_args = int(data[1:idx])
-        args = []
-        curr_idx = idx + 2
-        for _ in range(num_args):
-            idx = data.find(b"\r\n", curr_idx)
-            arg_len = int(data[curr_idx+1:idx])
-            curr_idx = idx + 2
-            arg = data[curr_idx:curr_idx+arg_len]
-            args.append(arg)
-            curr_idx += arg_len + 2
-        return args, data[curr_idx:], curr_idx
-    except:
-        return None, b"", 0
 
 def handle_client(client_connection):
     in_transaction = False
